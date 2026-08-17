@@ -1,0 +1,1 @@
+export const MESSAGE_TRANSPORT = Symbol('MESSAGE_TRANSPORT');

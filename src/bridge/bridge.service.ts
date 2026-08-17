@@ -1,9 +1,6 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleInit,
-} from '@nestjs/common';
-import { ServiceBusService } from '../service-bus/service-bus.service';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { MESSAGE_TRANSPORT } from '../messaging/messaging.constants';
+import { MessageTransport } from '../messaging/messaging.transport';
 import { ReportMappingService } from '../report-mapping/report-mapping.service';
 import { UnitFactoryFilterService } from '../unit-factory-filter/unit-factory-filter.service';
 import { HomeAssistantService } from '../home-assistant/home-assistant.service';
@@ -12,25 +9,27 @@ import { isPayloadV1 } from './bridge.types';
 /**
  * Glues the four modules together:
  *
- *   ServiceBus  ──►  UnitFactoryFilter  ──►  ReportMapping  ──►  HomeAssistant
+ *   MessageTransport  ──►  UnitFactoryFilter  ──►  ReportMapping  ──►  HomeAssistant
  *
- * This class is project-specific - the reusable modules above stay
- * untouched. A different project can swap in a different Bridge and
- * keep all of the inputs/outputs.
+ * The transport (Azure Service Bus or KubeMQ) is broker-agnostic:
+ * the bridge injects {@link MESSAGE_TRANSPORT} and never sees the
+ * underlying adapter. This class is project-specific - the
+ * reusable modules above stay untouched. A different project can
+ * swap in a different Bridge and keep all the inputs/outputs.
  */
 @Injectable()
 export class BridgeService implements OnModuleInit {
   private readonly logger = new Logger(BridgeService.name);
 
   constructor(
-    private readonly serviceBus: ServiceBusService,
+    @Inject(MESSAGE_TRANSPORT) private readonly transport: MessageTransport,
     private readonly reportMapping: ReportMappingService,
     private readonly unitFactoryFilter: UnitFactoryFilterService,
     private readonly homeAssistant: HomeAssistantService,
   ) {}
 
   onModuleInit(): void {
-    this.serviceBus.onMessage((body) => this.handle(body));
+    this.transport.registerHandler((body) => this.handle(body));
     this.logger.log('Bridge ready');
   }
 

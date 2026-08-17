@@ -1,16 +1,21 @@
 import type { ModuleMetadata } from '@nestjs/common';
-import type { ServiceBusOptions } from '../service-bus/service-bus.types';
+import type { MessagingOptions } from '../messaging/messaging.types';
 import type { ReportMappingOptions } from '../report-mapping/report-mapping.types';
 import type { UnitFactoryFilterOptions } from '../unit-factory-filter/unit-factory-filter.types';
 import type { HomeAssistantOptions } from '../home-assistant/home-assistant.types';
 
 /**
- * Aggregated wiring options for {@link BridgeModule}. Each field is
- * forwarded verbatim to the matching child module's
+ * Aggregated wiring options for {@link BridgeModule}. Each field
+ * is forwarded verbatim to the matching child module's
  * `forRoot/forRootAsync` API.
+ *
+ * `messaging` is provider-agnostic: pick `provider: 'azure'` or
+ * `provider: 'kubemq'` and supply the matching options block. The
+ * {@link MessagingModule} resolves to the right adapter without
+ * the rest of the app needing to know which broker is in use.
  */
 export interface BridgeOptions {
-  serviceBus: ServiceBusOptions;
+  messaging: MessagingOptions;
   reportMapping: ReportMappingOptions;
   unitFactoryFilter: UnitFactoryFilterOptions;
   homeAssistant: HomeAssistantOptions;
@@ -26,10 +31,12 @@ export interface BridgeAsyncOptions
 }
 
 /**
- * Shape of a single Service Bus message body.
+ * Shape of a single Service Bus / KubeMQ message body.
  *
  * Kept defensive: the broker may carry messages produced under
- * different `version`s; we verify structure before using it.
+ * different `version`s; we verify structure before using it. The
+ * same shape works for both transports because both carry UTF-8
+ * JSON.
  */
 export interface PayloadV1 {
   unitFactoryNumber: string;

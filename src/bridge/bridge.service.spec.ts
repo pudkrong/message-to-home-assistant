@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BridgeService } from './bridge.service';
-import { ServiceBusService } from '../service-bus/service-bus.service';
+import { MESSAGE_TRANSPORT } from '../messaging/messaging.constants';
+import { MessageTransport } from '../messaging/messaging.transport';
 import { ReportMappingService } from '../report-mapping/report-mapping.service';
 import { UnitFactoryFilterService } from '../unit-factory-filter/unit-factory-filter.service';
 import { HomeAssistantService } from '../home-assistant/home-assistant.service';
@@ -37,15 +38,14 @@ describe('BridgeService', () => {
     handlers = [];
     published = [];
 
+    const transport: MessageTransport = {
+      registerHandler: (h) => handlers.push(h),
+    };
+
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         BridgeService,
-        {
-          provide: ServiceBusService,
-          useValue: {
-            onMessage: (h: (b: unknown) => Promise<void> | void) => handlers.push(h),
-          },
-        },
+        { provide: MESSAGE_TRANSPORT, useValue: transport },
         {
           provide: ReportMappingService,
           useValue: {
@@ -85,7 +85,7 @@ describe('BridgeService', () => {
     bridge.onModuleInit();
   });
 
-  it('registers one service-bus handler on init', () => {
+  it('registers one transport handler on init', () => {
     expect(handlers).toHaveLength(1);
   });
 

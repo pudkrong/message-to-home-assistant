@@ -1,7 +1,7 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { BridgeService } from './bridge.service';
 import { BridgeAsyncOptions, BridgeOptions } from './bridge.types';
-import { ServiceBusModule } from '../service-bus/service-bus.module';
+import { MessagingModule } from '../messaging/messaging.module';
 import { ReportMappingModule } from '../report-mapping/report-mapping.module';
 import { UnitFactoryFilterModule } from '../unit-factory-filter/unit-factory-filter.module';
 import { HomeAssistantModule } from '../home-assistant/home-assistant.module';
@@ -16,10 +16,10 @@ import { HomeAssistantModule } from '../home-assistant/home-assistant.module';
  *
  * Implementation note: rather than rely on a shared DI token that
  * would force a parent/child DI contract across module boundaries,
- * each child `forRootAsync` derives its slice by invoking the parent
- * `useFactory` itself and projecting its field. This keeps every
- * level self-contained at the cost of the factory running once per
- * child — for env-based configs (the common case) this is
+ * each child `forRootAsync` derives its slice by invoking the
+ * parent `useFactory` itself and projecting its field. This keeps
+ * every level self-contained at the cost of the factory running
+ * once per child — for env-based configs (the common case) this is
  * idempotent; for stateful factories, pass resolved `BridgeOptions`
  * to {@link BridgeModule.forRoot} directly.
  */
@@ -30,7 +30,7 @@ export class BridgeModule {
     return {
       module: BridgeModule,
       imports: [
-        ServiceBusModule.forRoot(options.serviceBus),
+        MessagingModule.forRoot(options.messaging),
         ReportMappingModule.forRoot(options.reportMapping),
         UnitFactoryFilterModule.forRoot(options.unitFactoryFilter),
         HomeAssistantModule.forRoot(options.homeAssistant),
@@ -58,11 +58,11 @@ export class BridgeModule {
       module: BridgeModule,
       imports: [
         ...imports,
-        ServiceBusModule.forRootAsync({
+        MessagingModule.forRootAsync({
           imports,
           useFactory: async (...args: Parameters<typeof useFactory>) => {
             const opts = await useFactory(...args);
-            return project('serviceBus')(opts);
+            return project('messaging')(opts);
           },
           inject,
         }),

@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+.envrc
+
+# Tests / coverage
+coverage/
+.nyc_output/
+test/
+**/*.spec.ts
+
+# Local dev helpers (Mosquitto, HA)
+ha-config/
+mosquitto/
+
+# Git / IDE / OS junk
+.git/
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+
+# Misc
+Dockerfile
+.dockerignore
+README.md
+*.tgz

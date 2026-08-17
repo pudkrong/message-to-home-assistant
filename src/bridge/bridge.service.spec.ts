@@ -7,10 +7,31 @@ import { HomeAssistantService } from '../home-assistant/home-assistant.service';
 import { REPORT_MAPPING_OPTIONS } from '../report-mapping/report-mapping.constants';
 import { UNIT_FACTORY_FILTER_OPTIONS } from '../unit-factory-filter/unit-factory-filter.constants';
 
+interface PublishedEntity {
+  objectId: string;
+  value: string | number | boolean;
+  timestamp?: string;
+}
+
 describe('BridgeService', () => {
   let bridge: BridgeService;
   let handlers: Array<(body: unknown) => Promise<void> | void> = [];
-  let published: Array<{ objectId: string; value: string | number | boolean }> = [];
+  let published: PublishedEntity[] = [];
+
+  const humidityDescriptor = {
+    reportId: 10116,
+    description: 'humidity',
+    name: 'Humidity',
+    deviceClass: 'humidity',
+    unitOfMeasurement: '%',
+  };
+  const temperatureDescriptor = {
+    reportId: 10122,
+    description: 'temperature',
+    name: 'Temperature',
+    deviceClass: 'temperature',
+    unitOfMeasurement: '°C',
+  };
 
   beforeEach(async () => {
     handlers = [];
@@ -29,15 +50,8 @@ describe('BridgeService', () => {
           provide: ReportMappingService,
           useValue: {
             get: (id: number) => {
-              if (id === 10168) {
-                return {
-                  reportId: 10168,
-                  description: 'humidity',
-                  name: 'Humidity',
-                  deviceClass: 'humidity',
-                  unitOfMeasurement: '%',
-                };
-              }
+              if (id === humidityDescriptor.reportId) return humidityDescriptor;
+              if (id === temperatureDescriptor.reportId) return temperatureDescriptor;
               return undefined;
             },
           },
@@ -51,8 +65,12 @@ describe('BridgeService', () => {
         {
           provide: HomeAssistantService,
           useValue: {
-            publishEntityState: async (entity: any, value: string | number | boolean) => {
-              published.push({ objectId: entity.objectId, value });
+            publishEntityState: async (
+              entity: { objectId: string },
+              value: string | number | boolean,
+              timestamp?: string,
+            ) => {
+              published.push({ objectId: entity.objectId, value, timestamp });
             },
           },
         },
@@ -71,18 +89,22 @@ describe('BridgeService', () => {
     expect(handlers).toHaveLength(1);
   });
 
-  it('publishes only mapped reports for an allowed factory', async () => {
+  it('publishes every mapped report for an allowed factory and forwards the timestamp', async () => {
     await handlers[0]({
       unitFactoryNumber: '1234-000000-100000',
       version: 1,
-      timestamp: '2026-08-16T13:51:55.000Z',
+      timestamp: '2026-08-16T22:07:21.000Z',
       data: [
         { reportId: 10102, value: 3 }, // not in mapping
-        { reportId: 10168, value: 35 }, // humidity -> should publish
+        { reportId: 10116, value: 70.2 }, // humidity
+        { reportId: 10122, value: 25.8 }, // temperature
         { reportId: 99999, value: 1 }, // unknown
       ],
     });
-    expect(published).toEqual([{ objectId: 'humidity', value: 35 }]);
+    expect(published).toEqual([
+      { objectId: 'humidity', value: 70.2, timestamp: '2026-08-16T22:07:21.000Z' },
+      { objectId: 'temperature', value: 25.8, timestamp: '2026-08-16T22:07:21.000Z' },
+    ]);
   });
 
   it('skips messages from non-allowed factories', async () => {
@@ -90,7 +112,7 @@ describe('BridgeService', () => {
       unitFactoryNumber: 'NOT-ALLOWED',
       version: 1,
       timestamp: '2026-08-16T13:51:55.000Z',
-      data: [{ reportId: 10168, value: 50 }],
+      data: [{ reportId: 10116, value: 50 }],
     });
     expect(published).toEqual([]);
   });

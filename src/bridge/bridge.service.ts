@@ -66,6 +66,7 @@ export class BridgeService implements OnModuleInit {
           ...(descriptor.icon ? { icon: descriptor.icon } : {}),
         },
         item.value,
+        body.timestamp,
       );
       published++;
     }

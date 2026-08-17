@@ -19,6 +19,20 @@ interface Deferred {
 }
 
 /**
+ * MQTT state payload published to each entity's state topic.
+ *
+ * Always wraps the numeric value in JSON so HA can read both the
+ * value (via `value_template`) and the optional `timestamp`
+ * attribute. The `timestamp` lets consumers see when the
+ * upstream measurement was actually taken, not just when HA
+ * received it.
+ */
+interface SensorStatePayload {
+  value: string | number | boolean;
+  timestamp?: string;
+}
+
+/**
  * Generic MQTT bridge to Home Assistant. The module only owns
  * connection lifecycle, availability, discovery publishing and
  * per-entity state publish - it does not know anything about
@@ -100,6 +114,11 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
   /**
    * Publish the MQTT discovery config payload for `entity`. Idempotent:
    * repeated calls with the same `objectId` are a no-op.
+   *
+   * All sensors use the JSON state shape
+   * (`{ value, timestamp? }`) and a `value_template` so the timestamp
+   * from the upstream message lands in HA as an attribute instead
+   * of being silently dropped.
    */
   async registerEntity(entity: HomeAssistantEntityConfig): Promise<void> {
     if (!entity.objectId) {
@@ -118,6 +137,10 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       unique_id: uniqueId,
       name: entity.name,
       state_topic: stateTopic,
+      // Extract the numeric value out of the JSON envelope; HA
+      // surfaces the remaining fields (including `timestamp`) as
+      // attributes automatically.
+      value_template: '{{ value_json.value }}',
       availability_topic: availabilityTopic,
       payload_available: 'online',
       payload_not_available: 'offline',
@@ -142,29 +165,36 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
     this.logger.log(`Registered entity ${uniqueId} (${entity.name})`);
   }
 
-  /** Publish a state value for a previously registered entity. */
+  /**
+   * Publish a state value for a previously registered entity. The
+   * `timestamp` is the moment the upstream measurement was taken
+   * (ISO-8601 string); when set it is forwarded to HA as an
+   * attribute so the dashboard reflects the real reading time.
+   */
   async publishState(
     objectId: string,
     value: string | number | boolean,
+    timestamp?: string,
   ): Promise<void> {
     const deviceId = slugify(this.options.sensor);
     const topic = `${this.discovery()}/sensor/${deviceId}/${slugify(objectId)}/state`;
-    await this.publish(topic, String(value), { qos: 0, retain: true });
+    const payload: SensorStatePayload = { value };
+    if (timestamp !== undefined) payload.timestamp = timestamp;
+    await this.publish(topic, JSON.stringify(payload), { qos: 0, retain: true });
   }
 
   /**
-   * Convenience: write `value` and let consumers decide whether the
-   * entity has been registered yet. If you call this before
-   * {@link registerEntity} HA will still see the state because
-   * state_topic is known, but the entity will only be visible if HA
-   * has previously received the matching discovery payload.
+   * Convenience: register `entity` (idempotently) and publish its
+   * state. The optional `timestamp` is passed through to
+   * {@link publishState}.
    */
   async publishEntityState(
     entity: HomeAssistantEntityConfig,
     value: string | number | boolean,
+    timestamp?: string,
   ): Promise<void> {
     await this.registerEntity(entity);
-    await this.publishState(entity.objectId, value);
+    await this.publishState(entity.objectId, value, timestamp);
   }
 
   /** Force the HA `availability` topic for the device. */

@@ -11,6 +11,6 @@
     "description": "temperature",
     "name": "Temperature",
     "deviceClass": "temperature",
-    "unitOfMeasurement": "˚C"
+    "unitOfMeasurement": "°C"
   }
 ]

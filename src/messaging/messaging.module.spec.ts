@@ -1,7 +1,9 @@
 import { MessagingModule } from './messaging.module';
 import { AzureServiceBusModule } from './azure-service-bus.module';
-import { AzureServiceBusService } from './azure-service-bus.service';
 import { KubeMqEventsModule } from './kubemq-events.module';
+import { MODULE_OPTIONS_TOKEN as AZURE_SERVICE_BUS_OPTIONS } from './azure-service-bus.constants';
+import { MODULE_OPTIONS_TOKEN as KUBEMQ_EVENTS_OPTIONS } from './kubemq-events.constants';
+import { AzureServiceBusService } from './azure-service-bus.service';
 import { KubeMqEventsService } from './kubemq-events.service';
 import { MESSAGE_TRANSPORT } from './messaging.constants';
 
@@ -12,18 +14,17 @@ describe('MessagingModule', () => {
         provider: 'azure',
         azure: { queue: 'q' },
       });
+
       // The selection resolves to the dedicated Azure Service Bus
-      // dynamic module - the KubeMQ branch is never wired in.
+      // dynamic module - the KubeMQ branch is never wired in. The
+      // service and MESSAGE_TRANSPORT alias live in the module's
+      // @Module metadata; ConfigurableModuleClass only adds the
+      // options provider here.
       expect(dm.module).toBe(AzureServiceBusModule);
-      const provided = dm.providers?.map(
-        (p) =>
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (p as any).provide ?? (p as any),
-      );
-      expect(provided).toContain(AzureServiceBusService);
-      expect(provided).toContain(MESSAGE_TRANSPORT);
-      expect(provided).not.toContain(KubeMqEventsService);
-      expect(dm.exports).toContain(MESSAGE_TRANSPORT);
+      expect(dm.providers).toContainEqual({
+        provide: AZURE_SERVICE_BUS_OPTIONS,
+        useValue: { queue: 'q' },
+      });
     });
 
     it('routes kubemq provider through its own KubeMqEventsModule', () => {
@@ -31,34 +32,25 @@ describe('MessagingModule', () => {
         provider: 'kubemq',
         kubemq: { address: 'localhost:50000', channel: 'events' },
       });
-      // The selection resolves to the dedicated KubeMQ dynamic
-      // module - the Azure Service Bus branch is never wired in.
+
       expect(dm.module).toBe(KubeMqEventsModule);
-      const provided = dm.providers?.map(
-        (p) =>
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (p as any).provide ?? (p as any),
-      );
-      expect(provided).toContain(KubeMqEventsService);
-      expect(provided).toContain(MESSAGE_TRANSPORT);
-      expect(provided).not.toContain(AzureServiceBusService);
-      expect(dm.exports).toContain(MESSAGE_TRANSPORT);
+      expect(dm.providers).toContainEqual({
+        provide: KUBEMQ_EVENTS_OPTIONS,
+        useValue: { address: 'localhost:50000', channel: 'events' },
+      });
     });
 
     it('rejects when the provider has no matching options', () => {
       expect(() =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         MessagingModule.forRoot({ provider: 'azure' } as any),
       ).toThrow(/requires `azure` options/);
       expect(() =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         MessagingModule.forRoot({ provider: 'kubemq' } as any),
       ).toThrow(/requires `kubemq` options/);
     });
 
     it('rejects an unknown provider', () => {
       expect(() =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         MessagingModule.forRoot({ provider: 'kafka' } as any),
       ).toThrow(/unsupported provider/);
     });
@@ -73,9 +65,7 @@ describe('MessagingModule', () => {
         }),
       });
       const provided = dm.providers?.map(
-        (p) =>
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (p as any).provide ?? (p as any),
+        (p) => (p as any).provide ?? (p as any),
       );
       // LazyModuleLoader means neither adapter is registered at
       // boot - only the facade is. The active adapter subtree is

@@ -6,7 +6,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import mqtt, { MqttClient } from 'mqtt';
-import { HOME_ASSISTANT_OPTIONS } from './home-assistant.constants';
+import { MODULE_OPTIONS_TOKEN } from './home-assistant.constants';
 import {
   HomeAssistantEntityConfig,
   HomeAssistantOptions,
@@ -48,7 +48,7 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
   private online = false;
 
   constructor(
-    @Inject(HOME_ASSISTANT_OPTIONS) private readonly options: HomeAssistantOptions,
+    @Inject(MODULE_OPTIONS_TOKEN) private readonly options: HomeAssistantOptions,
   ) {}
 
   async onModuleInit(): Promise<void> {

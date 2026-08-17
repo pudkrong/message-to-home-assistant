@@ -1,5 +1,3 @@
-import type { ModuleMetadata } from '@nestjs/common';
-
 export interface HomeAssistantOptions {
   /**
    * Broker URL of the form `mqtts://user:password@host:port`
@@ -21,15 +19,6 @@ export interface HomeAssistantOptions {
   discoveryPrefix?: string;
   /** MQTT client id. Defaults to a slug of `sensor`. */
   clientId?: string;
-}
-
-export interface HomeAssistantAsyncOptions
-  extends Pick<ModuleMetadata, 'imports'> {
-  useFactory: (
-    ...args: any[]
-  ) => Promise<HomeAssistantOptions> | HomeAssistantOptions;
-  inject?: any[];
-  extraProviders?: any[];
 }
 
 /**

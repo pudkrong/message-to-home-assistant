@@ -1,9 +1,7 @@
 import { Inject, Injectable, Logger, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
 import { KubeMQClient, createConsoleLogger } from 'kubemq-js';
 import { MessageHandler, MessageTransport } from './messaging.transport';
-
-/** DI token for KubeMQ adapter options. Wired by {@link KubeMqEventsModule.forRoot}. */
-export const KUBEMQ_EVENTS_OPTIONS = Symbol('KUBEMQ_EVENTS_OPTIONS');
+import { MODULE_OPTIONS_TOKEN } from './kubemq-events.constants';
 
 /**
  * Options for the KubeMQ Events adapter.
@@ -135,7 +133,7 @@ export class KubeMqEventsService implements MessageTransport, OnModuleInit, OnAp
     this.handlers.push(handler);
   }
 
-  constructor(@Inject(KUBEMQ_EVENTS_OPTIONS) private readonly options: KubeMqEventsOptions) {}
+  constructor(@Inject(MODULE_OPTIONS_TOKEN) private readonly options: KubeMqEventsOptions) {}
 
   private async invoke(
     handler: MessageHandler,

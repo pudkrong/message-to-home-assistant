@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import * as fs from 'node:fs/promises';
-import { REPORT_MAPPING_OPTIONS } from './report-mapping.constants';
+import { MODULE_OPTIONS_TOKEN } from './report-mapping.constants';
 import {
   ReportDescriptor,
   ReportMappingOptions,
@@ -22,7 +22,7 @@ export class ReportMappingService implements OnModuleInit {
   private readonly byReportId = new Map<number, ReportDescriptor>();
 
   constructor(
-    @Inject(REPORT_MAPPING_OPTIONS)
+    @Inject(MODULE_OPTIONS_TOKEN)
     private readonly options: ReportMappingOptions,
   ) {}
 

@@ -1,5 +1,3 @@
-import type { ModuleMetadata } from '@nestjs/common';
-
 /**
  * Describes how the module should find its report -> entity mapping.
  *
@@ -32,11 +30,3 @@ export interface ReportDescriptor {
   icon?: string;
 }
 
-export interface ReportMappingAsyncOptions
-  extends Pick<ModuleMetadata, 'imports'> {
-  useFactory: (
-    ...args: any[]
-  ) => Promise<ReportMappingOptions> | ReportMappingOptions;
-  inject?: any[];
-  extraProviders?: any[];
-}

@@ -91,7 +91,7 @@ export class BridgeModule {
           inject,
         }),
       ],
-      providers: [BridgeService, ...(asyncOptions.extraProviders ?? [])],
+      providers: [BridgeService],
       exports: [BridgeService],
     };
   }

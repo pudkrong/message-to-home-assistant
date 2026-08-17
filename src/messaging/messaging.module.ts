@@ -57,8 +57,8 @@ const MESSAGING_OPTIONS = Symbol('MESSAGING_OPTIONS');
  * wires up its adapter behind the provider-agnostic
  * {@link MESSAGE_TRANSPORT} token; this function only picks which
  * one based on {@link MessagingOptions.provider}. Used directly by
- * {@link forRootStatic} and indirectly by the {@link forRootAsync}
- * path via {@link LazyModuleLoader}.
+ * {@link forRootStatic} and indirectly by {@link createAsyncModule}
+ * via {@link LazyModuleLoader}.
  */
 function buildActiveAdapterModule(options: MessagingOptions): DynamicModule {
   assertProviderOptions(options);
@@ -89,7 +89,7 @@ function forRootStatic(options: MessagingOptions): DynamicModule {
  * actual adapter instantiation to {@link LazyModuleLoader} so the
  * unselected branch never opens a connection at boot.
  */
-function forRootAsync(asyncOptions: MessagingAsyncOptions): DynamicModule {
+function createAsyncModule(asyncOptions: MessagingAsyncOptions): DynamicModule {
   const MESSAGING_FACADE = Symbol('MESSAGING_FACADE');
   const providers: Provider[] = [
     {
@@ -221,6 +221,6 @@ export class MessagingModule {
 
   /** Async entry point - defers the active adapter via {@link LazyModuleLoader}. */
   static forRootAsync(asyncOptions: MessagingAsyncOptions): DynamicModule {
-    return forRootAsync(asyncOptions);
+    return createAsyncModule(asyncOptions);
   }
 }

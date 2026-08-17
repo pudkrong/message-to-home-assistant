@@ -38,5 +38,4 @@ export interface MessagingAsyncOptions
     ...args: any[]
   ) => Promise<MessagingOptions> | MessagingOptions;
   inject?: any[];
-  extraProviders?: any[];
 }

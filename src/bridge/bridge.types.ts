@@ -27,7 +27,6 @@ export interface BridgeAsyncOptions
     ...args: any[]
   ) => Promise<BridgeOptions> | BridgeOptions;
   inject?: any[];
-  extraProviders?: any[];
 }
 
 /**

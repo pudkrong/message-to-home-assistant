@@ -42,7 +42,7 @@ export class BridgeService implements OnModuleInit {
     }
 
     if (!this.unitFactoryFilter.isAllowed(body.unitFactoryNumber)) {
-      this.logger.debug?.(
+      this.logger.debug(
         `Skipping message for unitFactoryNumber=${body.unitFactoryNumber} (not allowed)`,
       );
       return;

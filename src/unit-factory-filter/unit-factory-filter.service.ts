@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import * as fs from 'node:fs/promises';
-import { UNIT_FACTORY_FILTER_OPTIONS } from './unit-factory-filter.constants';
+import { MODULE_OPTIONS_TOKEN } from './unit-factory-filter.constants';
 import {
   UnitFactoryFilterOptions,
   UnitFactoryInfo,
@@ -25,7 +25,7 @@ export class UnitFactoryFilterService implements OnModuleInit {
   private readonly byNumber = new Map<string, UnitFactoryInfo>();
 
   constructor(
-    @Inject(UNIT_FACTORY_FILTER_OPTIONS)
+    @Inject(MODULE_OPTIONS_TOKEN)
     private readonly options: UnitFactoryFilterOptions,
   ) {}
 

@@ -1,5 +1,3 @@
-import type { ModuleMetadata } from '@nestjs/common';
-
 /**
  * Allowed `unitFactoryNumber`s and metadata about them. The list is
  * loaded from a JSON file by default; switching to a database is a
@@ -22,11 +20,3 @@ export interface UnitFactoryFilterOptions {
   source: UnitFactoryFilterSource;
 }
 
-export interface UnitFactoryFilterAsyncOptions
-  extends Pick<ModuleMetadata, 'imports'> {
-  useFactory: (
-    ...args: any[]
-  ) => Promise<UnitFactoryFilterOptions> | UnitFactoryFilterOptions;
-  inject?: any[];
-  extraProviders?: any[];
-}

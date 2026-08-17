@@ -5,8 +5,6 @@ import { MessageTransport } from '../messaging/messaging.transport';
 import { ReportMappingService } from '../report-mapping/report-mapping.service';
 import { UnitFactoryFilterService } from '../unit-factory-filter/unit-factory-filter.service';
 import { HomeAssistantService } from '../home-assistant/home-assistant.service';
-import { REPORT_MAPPING_OPTIONS } from '../report-mapping/report-mapping.constants';
-import { UNIT_FACTORY_FILTER_OPTIONS } from '../unit-factory-filter/unit-factory-filter.constants';
 
 interface PublishedEntity {
   objectId: string;
@@ -74,10 +72,6 @@ describe('BridgeService', () => {
             },
           },
         },
-        // provide options tokens so the real ReportMapping/UnitFactoryFilter
-        // modules would load if they were wired in - keeping them out for now
-        { provide: REPORT_MAPPING_OPTIONS, useValue: { source: { type: 'json', filePath: '' } } },
-        { provide: UNIT_FACTORY_FILTER_OPTIONS, useValue: { source: { type: 'json', filePath: '' } } },
       ],
     }).compile();
 

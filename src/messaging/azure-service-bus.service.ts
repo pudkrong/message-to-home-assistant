@@ -11,9 +11,7 @@ import {
 } from '@azure/service-bus';
 import { DefaultAzureCredential } from '@azure/identity';
 import { MessageHandler, MessageTransport } from './messaging.transport';
-
-/** DI token for Azure Service Bus adapter options. Wired by {@link AzureServiceBusModule.forRoot}. */
-export const AZURE_SERVICE_BUS_OPTIONS = Symbol('AZURE_SERVICE_BUS_OPTIONS');
+import { MODULE_OPTIONS_TOKEN } from './azure-service-bus.constants';
 
 /**
  * Options for the Azure Service Bus backend.
@@ -69,7 +67,7 @@ export class AzureServiceBusService
     | undefined;
 
   constructor(
-    @Inject(AZURE_SERVICE_BUS_OPTIONS)
+    @Inject(MODULE_OPTIONS_TOKEN)
     private readonly options: AzureServiceBusOptions,
   ) {}
 

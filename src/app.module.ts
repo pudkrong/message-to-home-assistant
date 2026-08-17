@@ -54,8 +54,8 @@ export class AppModule {}
  * continue to work without setting `MESSAGE_PROVIDER`.
  *
  * To switch providers, set `MESSAGE_PROVIDER=kubemq` and the
- * `KUBEMQ_*` block; `ServiceBusModule` is left untouched and
- * unused.
+ * `KUBEMQ_*` block; the Azure Service Bus backend is left
+ * untouched and unused.
  */
 function buildMessagingOptions(config: ConfigService): MessagingOptions {
   const provider = (config.get<string>('MESSAGE_PROVIDER', 'azure') ??

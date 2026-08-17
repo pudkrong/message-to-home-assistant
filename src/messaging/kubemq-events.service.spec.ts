@@ -1,4 +1,4 @@
-import { decodeKubeMqBody, normalizeKubeMqPayload } from './kubemq-events.adapter';
+import { decodeKubeMqBody, normalizeKubeMqPayload } from './kubemq-events.service';
 
 describe('KubeMQ payload decoding', () => {
   describe('decodeKubeMqBody', () => {

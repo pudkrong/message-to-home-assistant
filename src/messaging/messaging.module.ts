@@ -8,16 +8,12 @@ import {
   OnModuleInit,
   Provider,
 } from '@nestjs/common';
-import { LazyModuleLoader, ModuleRef } from '@nestjs/core';
-import { ServiceBusModule } from '../service-bus/service-bus.module';
-import { ServiceBusService } from '../service-bus/service-bus.service';
-import { AzureServiceBusAdapter } from './azure-service-bus.adapter';
+import { LazyModuleLoader } from '@nestjs/core';
+import { AzureServiceBusModule } from './azure-service-bus.module';
+import { AzureServiceBusService } from './azure-service-bus.service';
+import { KubeMqEventsModule } from './kubemq-events.module';
+import { KubeMqEventsService } from './kubemq-events.service';
 import { MESSAGE_TRANSPORT } from './messaging.constants';
-import {
-  KUBEMQ_EVENTS_OPTIONS,
-  KubeMqEventsOptions,
-  KubeMqEventsService,
-} from './kubemq-events.adapter';
 import { MessageHandler, MessageTransport } from './messaging.transport';
 import {
   MessagingAsyncOptions,
@@ -54,37 +50,23 @@ function logProviderChoice(opts: MessagingOptions): void {
 const MESSAGING_OPTIONS = Symbol('MESSAGING_OPTIONS');
 
 /**
- * Returns the DynamicModule that owns the chosen adapter along
- * with whatever sub-shapes its broker needs. Synchronous - used
- * directly by {@link forRootStatic} and indirectly by the
- * {@link forRootAsync} path via {@link LazyModuleLoader}.
+ * Returns the DynamicModule that owns the chosen broker backend.
+ *
+ * Each provider has its own dedicated dynamic module
+ * ({@link AzureServiceBusModule} / {@link KubeMqEventsModule}) that
+ * wires up its adapter behind the provider-agnostic
+ * {@link MESSAGE_TRANSPORT} token; this function only picks which
+ * one based on {@link MessagingOptions.provider}. Used directly by
+ * {@link forRootStatic} and indirectly by the {@link forRootAsync}
+ * path via {@link LazyModuleLoader}.
  */
 function buildActiveAdapterModule(options: MessagingOptions): DynamicModule {
+  assertProviderOptions(options);
   switch (options.provider as MessagingProvider) {
-    case 'azure': {
-      const serviceBusOpts = options.azure!;
-      return {
-        module: class AzureMessageSubModule {},
-        imports: [ServiceBusModule.forRoot(serviceBusOpts)],
-        providers: [
-          AzureServiceBusAdapter,
-          { provide: MESSAGE_TRANSPORT, useExisting: AzureServiceBusAdapter },
-        ],
-        exports: [MESSAGE_TRANSPORT],
-      };
-    }
-    case 'kubemq': {
-      const kubemqOpts = options.kubemq!;
-      return {
-        module: class KubeMqMessageSubModule {},
-        providers: [
-          { provide: KUBEMQ_EVENTS_OPTIONS, useValue: kubemqOpts },
-          KubeMqEventsService,
-          { provide: MESSAGE_TRANSPORT, useExisting: KubeMqEventsService },
-        ],
-        exports: [MESSAGE_TRANSPORT],
-      };
-    }
+    case 'azure':
+      return AzureServiceBusModule.forRoot(options.azure!);
+    case 'kubemq':
+      return KubeMqEventsModule.forRoot(options.kubemq!);
     default: {
       const _exhaustive: never = options.provider as never;
       void _exhaustive;
@@ -159,7 +141,7 @@ export class MessagingTransportFacade
   private readonly logger = new Logger(MessagingTransportFacade.name);
   private resolvedOptions: MessagingOptions | undefined;
   private adapter: MessageTransport | undefined;
-  private serviceBusRef: ServiceBusService | undefined;
+  private serviceBusRef: AzureServiceBusService | undefined;
   private kubemqRef: KubeMqEventsService | undefined;
 
   constructor(
@@ -182,7 +164,7 @@ export class MessagingTransportFacade
     // LazyModuleLoader only builds instances.
     switch (this.resolvedOptions.provider) {
       case 'azure': {
-        this.serviceBusRef = moduleRef.get(ServiceBusService, {
+        this.serviceBusRef = moduleRef.get(AzureServiceBusService, {
           strict: false,
         });
         await this.serviceBusRef!.onModuleInit();
@@ -216,10 +198,19 @@ export class MessagingTransportFacade
 /**
  * Provider-agnostic messaging wiring.
  *
+ * The user must pick exactly one broker backend for their app by
+ * setting {@link MessagingOptions.provider} to `'azure'` or
+ * `'kubemq'` and supplying the matching options block. The choice
+ * is validated at registration time and only the selected
+ * provider's dynamic module ({@link AzureServiceBusModule} or
+ * {@link KubeMqEventsModule}) is ever wired in - the other broker
+ * stays completely out of the DI graph.
+ *
  * Adding a new provider is three steps:
  *   1. Add a value to {@link MessagingProvider}.
  *   2. Add an options block to {@link MessagingOptions}.
- *   3. Add a `case` to {@link buildActiveAdapterModule}.
+ *   3. Create a provider module exposing {@link MESSAGE_TRANSPORT}
+ *      and return it from {@link buildActiveAdapterModule}.
  */
 @Module({})
 export class MessagingModule {

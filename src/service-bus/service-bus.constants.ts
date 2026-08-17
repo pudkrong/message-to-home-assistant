@@ -1,2 +1,0 @@
-export const SERVICE_BUS_OPTIONS = Symbol('SERVICE_BUS_OPTIONS');
-export const SERVICE_BUS_CLIENT = Symbol('SERVICE_BUS_CLIENT');

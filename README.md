@@ -8,11 +8,11 @@ project-specific bridge module:
 
 ```
 src/
-├── service-bus/           # generic — Azure Service Bus subscriber
+├── messaging/             # broker-agnostic transport (Azure Service Bus or KubeMQ)
 ├── home-assistant/        # generic — MQTT auto-discovery publisher
 ├── report-mapping/        # generic — reportId -> HA entity mapping (JSON or DB)
 ├── unit-factory-filter/   # generic — allow-list of unit factory numbers
-└── bridge/                # project glue (Service Bus → filter → map → HA)
+└── bridge/                # project glue (broker → filter → map → HA)
 ```
 
 ## Configuration
@@ -68,23 +68,28 @@ npm test               # jest
 
 ## Reusing the modules in another project
 
-Each module exposes a `forRootAsync({ useFactory })` API and exports
-only its public service, so they can be plugged into any NestJS app.
+Each module exposes a `forRoot` (or `forRootAsync({ useFactory })`)
+API and exports only its public service, so they can be plugged into
+any NestJS app. `MessagingModule` requires you to pick exactly one
+broker backend via `provider: 'azure' | 'kubemq'`:
 
 ```ts
-import { ServiceBusModule } from 'my-libs/service-bus';
+import { MessagingModule } from 'my-libs/messaging';
 import { HomeAssistantModule } from 'my-libs/home-assistant';
 import { ReportMappingModule } from 'my-libs/report-mapping';
 import { UnitFactoryFilterModule } from 'my-libs/unit-factory-filter';
 
 @Module({
   imports: [
-    ServiceBusModule.forRootAsync({
+    MessagingModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (cfg: ConfigService) => ({
-        connectionString: cfg.get('SERVICE_BUS_CONNECTION_STRING'),
-        namespace: cfg.get('SERVICE_BUS_NAMESPACE'),
-        queue: cfg.get('SERVICE_BUS_QUEUE'),
+        provider: 'azure',
+        azure: {
+          connectionString: cfg.get('SERVICE_BUS_CONNECTION_STRING'),
+          namespace: cfg.get('SERVICE_BUS_NAMESPACE'),
+          queue: cfg.get('SERVICE_BUS_QUEUE'),
+        },
       }),
       inject: [ConfigService],
     }),
@@ -111,7 +116,7 @@ a repository is enough — the bridge and HA modules stay untouched.
 
 ## How a message flows
 
-1. `ServiceBusService` receives a queue message (peekLock by default).
+1. `AzureServiceBusService` receives a queue message (peekLock by default).
 2. `BridgeService` validates the `PayloadV1` shape and checks the
    `unitFactoryNumber` against the allow-list.
 3. For every `data` entry whose `reportId` is mapped, the bridge

@@ -46,6 +46,7 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
   private readonly registered = new Map<string, HomeAssistantEntityConfig>();
   private readonly deferredQueue: Deferred[] = [];
   private online = false;
+  private refreshTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     @Inject(MODULE_OPTIONS_TOKEN) private readonly options: HomeAssistantOptions,
@@ -94,11 +95,26 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       this.online = false;
       this.logger.warn('MQTT connection closed');
     });
+
+    const interval =
+      (this.options.discoveryRefreshIntervalSeconds ?? 86400) * 1_000;
+    if (interval > 0) {
+      this.logger.log(
+        `Discovery refresh every ${this.options.discoveryRefreshIntervalSeconds ?? 86400}s`,
+      );
+      this.refreshTimer = setInterval(
+        () => this.refreshAllDiscovery(),
+        interval,
+      );
+    }
   }
 
   async onApplicationShutdown(): Promise<void> {
     try {
-      if (this.client?.connected) {
+      if (this.refreshTimer) {
+        clearInterval(this.refreshTimer);
+      }
+    if (this.client?.connected) {
         await this.publishAvailability(false);
       }
     } catch (err) {
@@ -129,32 +145,11 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       return;
     }
     const deviceId = slugify(this.options.sensor);
-    const stateTopic = `${this.discovery()}/sensor/${deviceId}/${slugify(entity.objectId)}/state`;
-    const availabilityTopic = `${this.discovery()}/sensor/${deviceId}/availability`;
-    const configTopic = `${this.discovery()}/sensor/${deviceId}/${slugify(entity.objectId)}/config`;
-
-    const configPayload: Record<string, unknown> = {
-      unique_id: uniqueId,
-      name: entity.name,
-      state_topic: stateTopic,
-      // Extract the numeric value out of the JSON envelope; HA
-      // surfaces the remaining fields (including `timestamp`) as
-      // attributes automatically.
-      value_template: '{{ value_json.value }}',
-      availability_topic: availabilityTopic,
-      payload_available: 'online',
-      payload_not_available: 'offline',
-      device: {
-        identifiers: [deviceId],
-        name: this.options.sensor,
-        ...(this.options.room ? { suggested_area: this.options.room } : {}),
-      },
-    };
-    if (entity.deviceClass) configPayload['device_class'] = entity.deviceClass;
-    if (entity.unitOfMeasurement) {
-      configPayload['unit_of_measurement'] = entity.unitOfMeasurement;
-    }
-    if (entity.icon) configPayload['icon'] = entity.icon;
+    const { configTopic, configPayload } = this.buildDiscoveryConfig(
+      entity,
+      uniqueId,
+      deviceId,
+    );
 
     await this.publish(
       configTopic,
@@ -206,6 +201,78 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       retain: true,
     });
   }
+
+  // ── periodic discovery refresh ──────────────────────────────
+
+  /**
+   * Unconditionally republish every registered entity's discovery
+   * config to the broker. Called on a timer so retained messages
+   * don't expire (some brokers enforce a `message-expiry-interval`
+   * even on retained messages).
+   */
+  private refreshAllDiscovery(): void {
+    if (this.registered.size === 0) return;
+    let count = 0;
+    for (const [uniqueId, entity] of this.registered) {
+      const deviceId = slugify(this.options.sensor);
+      const { configTopic, configPayload } = this.buildDiscoveryConfig(
+        entity,
+        uniqueId,
+        deviceId,
+      );
+      this.publish(configTopic, JSON.stringify(configPayload), {
+        qos: 0,
+        retain: true,
+      }).catch((err) =>
+        this.logger.warn(
+          `Discovery refresh failed for ${uniqueId}: ${(err as Error).message}`,
+        ),
+      );
+      count++;
+    }
+    this.logger.log(`Refreshed ${count} discovery config(s)`);
+  }
+
+  /**
+   * Build the MQTT discovery config payload and topic for `entity`.
+   *
+   * Extracted into a helper so both `registerEntity` (first-time
+   * registration) and `refreshAllDiscovery` (periodic re-publish)
+   * use the same logic.
+   */
+  private buildDiscoveryConfig(
+    entity: HomeAssistantEntityConfig,
+    uniqueId: string,
+    deviceId: string,
+  ): { configTopic: string; configPayload: Record<string, unknown> } {
+    const stateTopic = `${this.discovery()}/sensor/${deviceId}/${slugify(entity.objectId)}/state`;
+    const availabilityTopic = `${this.discovery()}/sensor/${deviceId}/availability`;
+    const configTopic = `${this.discovery()}/sensor/${deviceId}/${slugify(entity.objectId)}/config`;
+
+    const configPayload: Record<string, unknown> = {
+      unique_id: uniqueId,
+      name: entity.name,
+      state_topic: stateTopic,
+      value_template: '{{ value_json.value }}',
+      availability_topic: availabilityTopic,
+      payload_available: 'online',
+      payload_not_available: 'offline',
+      device: {
+        identifiers: [deviceId],
+        name: this.options.sensor,
+        ...(this.options.room ? { suggested_area: this.options.room } : {}),
+      },
+    };
+    if (entity.deviceClass) configPayload['device_class'] = entity.deviceClass;
+    if (entity.unitOfMeasurement) {
+      configPayload['unit_of_measurement'] = entity.unitOfMeasurement;
+    }
+    if (entity.icon) configPayload['icon'] = entity.icon;
+
+    return { configTopic, configPayload };
+  }
+
+  // ── availability ────────────────────────────────────────────
 
   private discovery(): string {
     return this.options.discoveryPrefix ?? 'homeassistant';

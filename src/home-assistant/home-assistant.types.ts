@@ -19,6 +19,12 @@ export interface HomeAssistantOptions {
   discoveryPrefix?: string;
   /** MQTT client id. Defaults to a slug of `sensor`. */
   clientId?: string;
+  /**
+   * How often to republish all discovery configs (seconds).
+   * Defaults to 86400 (1 day). Set to 0 to disable periodic
+   * refresh entirely.
+   */
+  discoveryRefreshIntervalSeconds?: number;
 }
 
 /**

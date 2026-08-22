@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "NestJS app that bridges Azure Service Bus messages to Home Assistant via MQTT",
   "private": true,
+  "packageManager": "bun@1.4.0",
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",

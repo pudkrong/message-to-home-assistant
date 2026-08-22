@@ -58,12 +58,14 @@ optional HA fields `deviceClass`, `unitOfMeasurement`, `icon`.
 
 ## Run
 
+[Bun](https://bun.sh) 1.4 is the package manager and runtime.
+
 ```bash
-npm install
-npm run start:dev      # ts-node-watch
-npm run start:prod     # from dist/
-npm run typecheck      # tsc --noEmit
-npm test               # jest
+bun install
+bun run start:dev      # nest start --watch
+bun run start:prod     # bun dist/main.js
+bun run typecheck      # tsc --noEmit
+bun test               # jest
 ```
 
 ## Reusing the modules in another project
@@ -74,6 +76,7 @@ any NestJS app. `MessagingModule` requires you to pick exactly one
 broker backend via `provider: 'azure' | 'kubemq'`:
 
 ```ts
+import { ConfigModule } from '@nestjs/config';
 import { MessagingModule } from 'my-libs/messaging';
 import { HomeAssistantModule } from 'my-libs/home-assistant';
 import { ReportMappingModule } from 'my-libs/report-mapping';

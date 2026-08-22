@@ -68,6 +68,17 @@ bun run typecheck      # tsc --noEmit
 bun test               # jest
 ```
 
+## Docker
+
+The image uses `oven/bun:1.4-alpine`. Build locally first — Bun's JSC
+heap runs out of memory when cross-compiling inside QEMU emulation.
+
+```bash
+bun run build            # compile TypeScript → dist/
+podman build --platform linux/amd64 -t ha .
+podman run --rm --env-file .env ha
+```
+
 ## Reusing the modules in another project
 
 Each module exposes a `forRoot` (or `forRootAsync({ useFactory })`)

@@ -1,22 +1,30 @@
-# ---- Base ----
-FROM oven/bun:1.4-alpine AS base
+# ---- Build ----
+FROM node:24-alpine AS build
 WORKDIR /app
-ENV NODE_ENV=production
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
+COPY src ./src
+RUN npm run build
 
 # ---- Production deps ----
-FROM base AS deps
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+FROM node:24-alpine AS prod-deps
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # ---- Runtime ----
-FROM base
-USER bun
+FROM node:24-alpine
+ENV NODE_ENV=production
+WORKDIR /app
+USER node
 
-COPY --from=deps --chown=bun:bun /app/node_modules ./node_modules
-COPY --chown=bun:bun dist ./dist
-COPY --chown=bun:bun config ./config
-COPY --chown=bun:bun package.json ./
+COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --chown=node:node config ./config
+COPY --chown=node:node package.json ./
 
 EXPOSE 3000
 
-CMD ["bun", "run", "dist/main.js"]
+CMD ["node", "dist/main.js"]

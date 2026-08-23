@@ -30,6 +30,7 @@ Copy `.env.example` to `.env` and fill in:
 | `HA_SENSOR` | Device identifier / display name for the HA device. |
 | `HA_ROOM` | `suggested_area` on the HA device. |
 | `HA_DISCOVERY_PREFIX` | (default `homeassistant`) MQTT discovery root. |
+| `HA_DISCOVERY_REFRESH_SECONDS` | (default `3600`) How often all discovery configs are republished. `0` disables the periodic refresh. |
 
 ### `config/reports.json`
 
@@ -136,12 +137,39 @@ a repository is enough — the bridge and HA modules stay untouched.
 3. For every `data` entry whose `reportId` is mapped, the bridge
    calls `HomeAssistantService.publishEntityState`, which publishes
    the discovery config (once) and a retained `state` update.
-4. QoS is `0`, retain is `true` — the standard HA sensor pattern.
+4. QoS is `0`; discovery configs, availability and state are published
+   with `retain: true`.
 
-MQTT topic layout:
+MQTT topic layout (under the discovery prefix):
 
 ```
-homeassistant/sensor/<device>/<entity>/config
-homeassistant/sensor/<device>/<entity>/state
-homeassistant/sensor/<device>/availability
+<prefix>/sensor/<device>/<entity>/config
+<prefix>/sensor/<device>/<entity>/state
+<prefix>/sensor/<device>/availability
+<prefix>/status              # HA birth/LWT topic - subscribed by this app
 ```
+
+## Restart & retention behavior
+
+Home Assistant does not persist MQTT discovery itself — on startup it
+rebuilds devices purely from **retained** messages still stored on the
+broker. Managed brokers may expire retained messages (e.g. HiveMQ Cloud
+free tier: ~72h), which silently deletes discovery configs and makes the
+device vanish from HA. This app defends against that with four layers:
+
+1. Discovery configs and availability are published with an explicit
+   MQTT v5 `message-expiry-interval` of 24h (the connection uses
+   `protocolVersion: 5`).
+2. All registered discovery configs are re-announced every
+   `HA_DISCOVERY_REFRESH_SECONDS` (default 1 hour) — well inside any
+   broker expiry window.
+3. The app subscribes to `<prefix>/status`. When Home Assistant starts,
+   its MQTT integration publishes `online` there, and the app
+   immediately re-announces every config so entities are recreated live
+   without restarting anything or waiting for the timer.
+4. On app connect/reconnect (e.g. after a broker restart) discovery
+   configs are re-announced as well.
+
+A Last Will (`offline`, retained) on the availability topic means that
+if the app crashes ungracefully, HA marks the device unavailable instead
+of showing stale data forever.

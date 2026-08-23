@@ -33,6 +33,17 @@ interface SensorStatePayload {
 }
 
 /**
+ * Explicit MQTT v5 message-expiry interval (seconds) applied to
+ * retained discovery/availability messages. Managed brokers such as
+ * HiveMQ Cloud expire retained messages on their own schedule
+ * (~72h on the free tier), which silently deletes discovery configs
+ * and makes devices disappear from Home Assistant after a restart.
+ * Setting an explicit, shorter interval plus the periodic refresh
+ * keeps retention deterministically alive.
+ */
+const DISCOVERY_MESSAGE_EXPIRY_SECONDS = 86_400;
+
+/**
  * Generic MQTT bridge to Home Assistant. The module only owns
  * connection lifecycle, availability, discovery publishing and
  * per-entity state publish - it does not know anything about
@@ -66,12 +77,28 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       this.options.clientId ?? `nestjs-ha-bridge-${slugify(this.options.sensor)}`;
     const connectUrl = `${this.parsed.protocol}://${this.parsed.host}:${this.parsed.port}`;
 
+    const deviceId = slugify(this.options.sensor);
+    const availabilityTopic = `${this.discovery()}/sensor/${deviceId}/availability`;
+    const statusTopic = `${this.discovery()}/status`;
+
     this.client = mqtt.connect(connectUrl, {
       clientId,
       username: this.parsed.username,
       password: this.parsed.password,
       reconnectPeriod: 5000,
       clean: true,
+      // MQTT v5 so retained messages can carry an explicit
+      // message-expiry interval (see DISCOVERY_MESSAGE_EXPIRY_SECONDS).
+      protocolVersion: 5,
+      // Last Will: if this app dies ungracefully the broker publishes a
+      // retained "offline" so HA marks the device unavailable instead of
+      // showing stale data forever.
+      will: {
+        topic: availabilityTopic,
+        payload: 'offline',
+        qos: 0,
+        retain: true,
+      },
     });
 
     this.client.on('connect', () => {
@@ -80,11 +107,35 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
         `Connected to MQTT broker ${this.parsed?.host}:${this.parsed?.port}` +
           ` as ${this.parsed?.username ?? '<anonymous>'}`,
       );
+      // The session is clean - re-subscribe on every (re)connect so we
+      // keep receiving HA's birth message.
+      this.client?.subscribe(statusTopic, { qos: 0 }, (err) => {
+        if (err) {
+          this.logger.error(
+            `Failed to subscribe to ${statusTopic}: ${err.message}`,
+          );
+        }
+      });
       // Push retained "online" so HA immediately marks us available.
       this.publishAvailability(true).catch(() => undefined);
+      // Re-announce all discovery configs: covers brokers that lost or
+      // expired the retained configs while we were disconnected.
+      this.refreshAllDiscovery();
       while (this.deferredQueue.length > 0) {
         this.deferredQueue.shift()?.resolve();
       }
+    });
+
+    // HA publishes "online" to `<prefix>/status` whenever its MQTT
+    // integration starts. Re-announce immediately so entities are
+    // recreated without waiting for the periodic refresh timer.
+    this.client.on('message', (topic, payload) => {
+      if (topic !== statusTopic || payload.toString() !== 'online') return;
+      this.logger.log(
+        'Home Assistant came online - re-announcing discovery configs',
+      );
+      this.publishAvailability(true).catch(() => undefined);
+      this.refreshAllDiscovery();
     });
 
     this.client.on('reconnect', () => this.logger.warn('MQTT reconnecting...'));
@@ -97,10 +148,10 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
     });
 
     const interval =
-      (this.options.discoveryRefreshIntervalSeconds ?? 86400) * 1_000;
+      (this.options.discoveryRefreshIntervalSeconds ?? 3600) * 1_000;
     if (interval > 0) {
       this.logger.log(
-        `Discovery refresh every ${this.options.discoveryRefreshIntervalSeconds ?? 86400}s`,
+        `Discovery refresh every ${this.options.discoveryRefreshIntervalSeconds ?? 3600}s`,
       );
       this.refreshTimer = setInterval(
         () => this.refreshAllDiscovery(),
@@ -151,11 +202,11 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       deviceId,
     );
 
-    await this.publish(
-      configTopic,
-      JSON.stringify(configPayload),
-      { qos: 0, retain: true },
-    );
+    await this.publish(configTopic, JSON.stringify(configPayload), {
+      qos: 0,
+      retain: true,
+      messageExpiryInterval: DISCOVERY_MESSAGE_EXPIRY_SECONDS,
+    });
     this.registered.set(uniqueId, entity);
     this.logger.log(`Registered entity ${uniqueId} (${entity.name})`);
   }
@@ -199,6 +250,7 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
     await this.publish(topic, online ? 'online' : 'offline', {
       qos: 0,
       retain: true,
+      messageExpiryInterval: DISCOVERY_MESSAGE_EXPIRY_SECONDS,
     });
   }
 
@@ -223,6 +275,7 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       this.publish(configTopic, JSON.stringify(configPayload), {
         qos: 0,
         retain: true,
+        messageExpiryInterval: DISCOVERY_MESSAGE_EXPIRY_SECONDS,
       }).catch((err) =>
         this.logger.warn(
           `Discovery refresh failed for ${uniqueId}: ${(err as Error).message}`,
@@ -285,7 +338,12 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
   private publish(
     topic: string,
     payload: string,
-    opts: { qos: 0 | 1 | 2; retain: boolean },
+    opts: {
+      qos: 0 | 1 | 2;
+      retain: boolean;
+      /** MQTT v5 message-expiry interval in seconds (requires protocolVersion 5). */
+      messageExpiryInterval?: number;
+    },
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       if (!this.client) {
@@ -293,10 +351,25 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
         return;
       }
       const doPublish = (): void => {
-        this.client!.publish(topic, payload, opts, (err) => {
-          if (err) reject(err as Error);
-          else resolve();
-        });
+        this.client!.publish(
+          topic,
+          payload,
+          {
+            qos: opts.qos,
+            retain: opts.retain,
+            ...(opts.messageExpiryInterval !== undefined
+              ? {
+                  properties: {
+                    messageExpiryInterval: opts.messageExpiryInterval,
+                  },
+                }
+              : {}),
+          },
+          (err) => {
+            if (err) reject(err as Error);
+            else resolve();
+          },
+        );
       };
       if (this.online) {
         doPublish();

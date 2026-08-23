@@ -21,7 +21,7 @@ export interface HomeAssistantOptions {
   clientId?: string;
   /**
    * How often to republish all discovery configs (seconds).
-   * Defaults to 86400 (1 day). Set to 0 to disable periodic
+   * Defaults to 3600 (1 hour). Set to 0 to disable periodic
    * refresh entirely.
    */
   discoveryRefreshIntervalSeconds?: number;

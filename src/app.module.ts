@@ -40,6 +40,9 @@ import { MessagingOptions } from './messaging/messaging.types';
           sensor: config.get<string>('HA_SENSOR', ''),
           room: config.get<string>('HA_ROOM', ''),
           discoveryPrefix: config.get<string>('HA_DISCOVERY_PREFIX', 'homeassistant'),
+          discoveryRefreshIntervalSeconds: parseOptionalNumber(
+            config.get<string>('HA_DISCOVERY_REFRESH_SECONDS'),
+          ),
         },
       }),
       inject: [ConfigService],
@@ -106,4 +109,11 @@ function buildMessagingOptions(config: ConfigService): MessagingOptions {
   }
 
   throw new Error(`[Messaging] unknown MESSAGE_PROVIDER: ${provider}`);
+}
+
+/** Parse an env var into a finite number, or undefined when unset/invalid. */
+function parseOptionalNumber(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

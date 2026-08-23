@@ -1,4 +1,4 @@
-import { ParsedMqttUrl } from './home-assistant.types';
+import type { ParsedMqttUrl } from './home-assistant.types';
 
 /**
  * Parse an MQTT broker URL of the form

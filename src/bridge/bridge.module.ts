@@ -1,6 +1,6 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { BridgeService } from './bridge.service';
-import { BridgeAsyncOptions, BridgeOptions } from './bridge.types';
+import type { BridgeAsyncOptions, BridgeOptions } from './bridge.types';
 import { MessagingModule } from '../messaging/messaging.module';
 import { ReportMappingModule } from '../report-mapping/report-mapping.module';
 import { UnitFactoryFilterModule } from '../unit-factory-filter/unit-factory-filter.module';

@@ -10,7 +10,7 @@ import {
   ServiceBusReceivedMessage,
 } from '@azure/service-bus';
 import { DefaultAzureCredential } from '@azure/identity';
-import { MessageHandler, MessageTransport } from './messaging.transport';
+import type { MessageHandler, MessageTransport } from './messaging.transport';
 import { MODULE_OPTIONS_TOKEN } from './azure-service-bus.constants';
 
 /**

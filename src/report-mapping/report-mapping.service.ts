@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import * as fs from 'node:fs/promises';
 import { MODULE_OPTIONS_TOKEN } from './report-mapping.constants';
-import {
+import type {
   ReportDescriptor,
   ReportMappingOptions,
 } from './report-mapping.types';

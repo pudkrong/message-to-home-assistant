@@ -14,8 +14,8 @@ import { AzureServiceBusService } from './azure-service-bus.service';
 import { KubeMqEventsModule } from './kubemq-events.module';
 import { KubeMqEventsService } from './kubemq-events.service';
 import { MESSAGE_TRANSPORT } from './messaging.constants';
-import { MessageHandler, MessageTransport } from './messaging.transport';
-import {
+import type { MessageHandler, MessageTransport } from './messaging.transport';
+import type {
   MessagingAsyncOptions,
   MessagingOptions,
   MessagingProvider,

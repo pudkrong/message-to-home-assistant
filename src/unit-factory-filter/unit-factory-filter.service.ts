@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import * as fs from 'node:fs/promises';
 import { MODULE_OPTIONS_TOKEN } from './unit-factory-filter.constants';
-import {
+import type {
   UnitFactoryFilterOptions,
   UnitFactoryInfo,
 } from './unit-factory-filter.types';

@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { MESSAGE_TRANSPORT } from '../messaging/messaging.constants';
-import { MessageTransport } from '../messaging/messaging.transport';
+import type { MessageTransport } from '../messaging/messaging.transport';
 import { ReportMappingService } from '../report-mapping/report-mapping.service';
 import { UnitFactoryFilterService } from '../unit-factory-filter/unit-factory-filter.service';
 import { HomeAssistantService } from '../home-assistant/home-assistant.service';

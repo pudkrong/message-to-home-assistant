@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import mqtt, { MqttClient } from 'mqtt';
 import { MODULE_OPTIONS_TOKEN } from './home-assistant.constants';
-import {
+import type {
   HomeAssistantEntityConfig,
   HomeAssistantOptions,
 } from './home-assistant.types';

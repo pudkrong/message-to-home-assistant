@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
 import { KubeMQClient, createConsoleLogger } from 'kubemq-js';
-import { MessageHandler, MessageTransport } from './messaging.transport';
+import type { MessageHandler, MessageTransport } from './messaging.transport';
 import { MODULE_OPTIONS_TOKEN } from './kubemq-events.constants';
 
 /**

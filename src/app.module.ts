@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BridgeModule } from './bridge/bridge.module';
-import { BridgeOptions } from './bridge/bridge.types';
-import { MessagingOptions } from './messaging/messaging.types';
+import type { BridgeOptions } from './bridge/bridge.types';
+import type { MessagingOptions } from './messaging/messaging.types';
 
 /**
  * Tiny entry point. The four infra modules

@@ -58,6 +58,13 @@ export class KubeMqEventsService implements MessageTransport, OnModuleInit, OnAp
   private subscription: { cancel(): void } | undefined;
   private readonly handlers: MessageHandler[] = [];
 
+  /** Set once the app is shutting down; stops further reconnect attempts. */
+  private closed = false;
+  private reconnectTimer: NodeJS.Timeout | undefined;
+  private reconnectAttempt = 0;
+  /** Cap for exponential backoff, anything above this is unnecessary. */
+  private readonly maxReconnectDelayMs = 30_000;
+
   async onModuleInit(): Promise<void> {
     if (!this.options.address) {
       throw new Error('[KubeMQEvents] KUBEMQ_ADDRESS is required');
@@ -89,6 +96,25 @@ export class KubeMqEventsService implements MessageTransport, OnModuleInit, OnAp
         : {}),
     });
 
+    // The kubemq-js SDK only re-establishes subscriptions when the whole
+    // gRPC channel enters TRANSIENT_FAILURE. A single dropped server
+    // stream fires `onError` but never resubscribes, so the subscriber
+    // silently goes dead after e.g. a broker restart. Own the resubscribe
+    // loop here instead: any error cancels the dead stream and schedules a
+    // fresh one with capped exponential backoff + jitter, retrying forever.
+    this.subscribe();
+
+    const groupDesc = this.options.group
+      ? ` (group=${this.options.group})`
+      : '';
+    this.logger.log(
+      `Subscribed to channel "${this.options.channel}"${groupDesc} on ${this.options.address}`,
+    );
+  }
+
+  private subscribe(): void {
+    if (this.closed || !this.client) return;
+
     this.subscription = this.client.subscribeToEvents({
       channel: this.options.channel,
       ...(this.options.group !== undefined
@@ -104,19 +130,48 @@ export class KubeMqEventsService implements MessageTransport, OnModuleInit, OnAp
         }
       },
       onError: (err) => {
-        this.logger.error(`KubeMQ subscription error: ${err.message}`, err.stack);
+        this.logger.error(
+          `KubeMQ subscription error: ${err.message}. Scheduling reconnect...`,
+        );
+        this.reconnectAttempt++;
+        this.scheduleReconnect();
       },
     });
+  }
 
-    const groupDesc = this.options.group
-      ? ` (group=${this.options.group})`
-      : '';
-    this.logger.log(
-      `Subscribed to channel "${this.options.channel}"${groupDesc} on ${this.options.address}`,
+  private scheduleReconnect(): void {
+    if (this.closed) return;
+
+    // Discard the dead stream before creating a replacement.
+    try {
+      this.subscription?.cancel();
+    } catch (err) {
+      this.logger.debug(
+        `Error cancelling stale subscription: ${(err as Error).message}`,
+      );
+    }
+
+    // Only ever one pending reconnect; a burst of errors coalesces into it.
+    if (this.reconnectTimer) return;
+
+    const delay = Math.min(
+      this.maxReconnectDelayMs,
+      1_000 * 2 ** this.reconnectAttempt,
     );
+    // Jitter avoids thundering-herd reconnects across worker replicas.
+    const jitter = Math.random() * 250;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      this.subscribe();
+    }, delay + jitter);
   }
 
   async onApplicationShutdown(): Promise<void> {
+    this.closed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     try {
       this.subscription?.cancel();
     } catch (err) {

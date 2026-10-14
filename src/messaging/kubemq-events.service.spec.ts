@@ -1,4 +1,15 @@
-import { decodeKubeMqBody, normalizeKubeMqPayload } from './kubemq-events.service';
+import type {
+  EventsClient,
+  EventsReceiveMessage,
+  EventsReceiveMessageCallback,
+  EventsSubscriptionResponse,
+} from 'kubemq-js';
+import { firstValueFrom } from 'rxjs';
+import {
+  decodeKubeMqBody,
+  KubeMqEventsService,
+  normalizeKubeMqPayload,
+} from './kubemq-events.service';
 
 describe('KubeMQ payload decoding', () => {
   describe('decodeKubeMqBody', () => {
@@ -8,6 +19,10 @@ describe('KubeMQ payload decoding', () => {
 
     it('returns the empty string when the body is empty', () => {
       expect(decodeKubeMqBody(new Uint8Array())).toBe('');
+    });
+
+    it('accepts the string body form returned by kubemq-js v1.4', () => {
+      expect(decodeKubeMqBody('{"a":1}')).toEqual({ a: 1 });
     });
 
     it('falls back to the raw string on invalid JSON', () => {
@@ -83,5 +98,101 @@ describe('KubeMQ payload decoding', () => {
       expect(normalizeKubeMqPayload(42)).toBe(42);
       expect(normalizeKubeMqPayload('text')).toBe('text');
     });
+  });
+});
+
+describe('KubeMqEventsService observable subscription', () => {
+  function makeService(client: EventsClient): KubeMqEventsService {
+    const service = new KubeMqEventsService({
+      address: 'localhost:50000',
+      channel: 'events',
+    });
+    (service as unknown as { eventClient: EventsClient }).eventClient = client;
+    return service;
+  }
+
+  it('parses callback messages and unsubscribes after the observer completes', async () => {
+    let callback: EventsReceiveMessageCallback | undefined;
+    const unsubscribe = jest.fn();
+    const client = {
+      subscribe: jest.fn((_request: unknown, onMessage: EventsReceiveMessageCallback) => {
+        callback = onMessage;
+        return Promise.resolve({ unsubscribe } as unknown as EventsSubscriptionResponse);
+      }),
+    } as unknown as EventsClient;
+    const service = makeService(client);
+
+    const resultPromise = firstValueFrom(service.eventSubscribe$<{ value: number }>('events'));
+    callback?.(null, {
+      id: 'event-1',
+      channel: 'events',
+      metadata: 'source=test',
+      body: '{"value":42}',
+      tags: new Map(),
+    });
+
+    await expect(resultPromise).resolves.toEqual({
+      id: 'event-1',
+      payload: { value: 42 },
+      channel: 'events',
+      metadata: 'source=test',
+    });
+    await Promise.resolve();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('unsubscribes when teardown wins the asynchronous setup race', async () => {
+    let resolveSubscribe!: (value: EventsSubscriptionResponse) => void;
+    const unsubscribe = jest.fn();
+    const client = {
+      subscribe: jest.fn(
+        () =>
+          new Promise<EventsSubscriptionResponse>((resolve) => {
+            resolveSubscribe = resolve;
+          }),
+      ),
+    } as unknown as EventsClient;
+    const service = makeService(client);
+    const observer = service.eventSubscribe$('events').subscribe();
+
+    observer.unsubscribe();
+    resolveSubscribe({ unsubscribe } as unknown as EventsSubscriptionResponse);
+    await Promise.resolve();
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('recreates the client and retries after a subscription error', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    let callback!: EventsReceiveMessageCallback;
+    const firstClient = {
+      subscribe: jest.fn((_request: unknown, onMessage: EventsReceiveMessageCallback) => {
+        callback = onMessage;
+        return Promise.resolve({ unsubscribe: jest.fn() });
+      }),
+      close: jest.fn(),
+    } as unknown as EventsClient;
+    const secondClient = {
+      subscribe: jest.fn(() => Promise.resolve({ unsubscribe: jest.fn() })),
+      close: jest.fn(),
+    } as unknown as EventsClient;
+    const service = makeService(firstClient);
+    const recreateClient = jest.fn(() => secondClient);
+    (service as unknown as { createEventClient: () => EventsClient }).createEventClient =
+      recreateClient;
+    const observer = service.eventSubscribe$('events').subscribe();
+
+    callback(new Error('connection dropped'), {} as EventsReceiveMessage);
+    await jest.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    expect(firstClient.close).toHaveBeenCalledTimes(1);
+    expect(recreateClient).toHaveBeenCalledTimes(1);
+    expect(secondClient.subscribe).toHaveBeenCalledTimes(1);
+
+    observer.unsubscribe();
+    jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 });

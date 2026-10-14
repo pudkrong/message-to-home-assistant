@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { readFileSync } from 'node:fs';
 import { BridgeModule } from './bridge/bridge.module';
 import type { BridgeOptions } from './bridge/bridge.types';
 import type { MessagingOptions } from './messaging/messaging.types';
@@ -85,26 +86,39 @@ function buildMessagingOptions(config: ConfigService): MessagingOptions {
         '[Messaging] MESSAGE_PROVIDER=kubemq requires both KUBEMQ_ADDRESS and KUBEMQ_CHANNEL',
       );
     }
-    const credentials = config.get<string>('KUBEMQ_TOKEN');
+    const authToken = config.get<string>('KUBEMQ_TOKEN');
     const tlsRaw = config.get<string>('KUBEMQ_TLS', 'false')?.toLowerCase();
-    const tlsValue = tlsRaw === 'true' ? true : tlsRaw === undefined ? undefined : false;
-    const keepalivePingRaw = config.get<string>('KUBEMQ_KEEPALIVE_PING_MS');
-    const keepalivePingMs = keepalivePingRaw ? Number(keepalivePingRaw) : undefined;
+    const tlsCertPath = config.get<string>('KUBEMQ_TLS_CERT_PATH');
+    const tlsKeyPath = config.get<string>('KUBEMQ_TLS_KEY_PATH');
+    if ((tlsCertPath && !tlsKeyPath) || (!tlsCertPath && tlsKeyPath)) {
+      throw new Error(
+        '[Messaging] KubeMQ TLS requires both KUBEMQ_TLS_CERT_PATH and KUBEMQ_TLS_KEY_PATH',
+      );
+    }
+    if (tlsRaw === 'true' && !tlsCertPath) {
+      throw new Error(
+        '[Messaging] kubemq-js v1.4 requires certificate and key files for TLS; set KUBEMQ_TLS_CERT_PATH and KUBEMQ_TLS_KEY_PATH',
+      );
+    }
+    const tlsCredentials =
+      tlsCertPath && tlsKeyPath
+        ? {
+            cert: readFileSync(tlsCertPath),
+            key: readFileSync(tlsKeyPath),
+          }
+        : undefined;
     return {
       provider: 'kubemq',
       kubemq: {
         address,
         channel,
-        ...(credentials ? { credentials } : {}),
-        ...(tlsValue !== undefined ? { tls: tlsValue } : {}),
+        ...(authToken ? { authToken } : {}),
+        ...(tlsCredentials ? { credentials: tlsCredentials } : {}),
         ...(config.get<string>('KUBEMQ_CLIENT_ID')
           ? { clientId: config.get<string>('KUBEMQ_CLIENT_ID')! }
           : {}),
         ...(config.get<string>('KUBEMQ_GROUP')
           ? { group: config.get<string>('KUBEMQ_GROUP')! }
-          : {}),
-        ...(keepalivePingMs !== undefined && Number.isFinite(keepalivePingMs)
-          ? { keepalivePingMs }
           : {}),
       },
     };

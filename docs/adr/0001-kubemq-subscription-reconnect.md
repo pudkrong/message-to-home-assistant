@@ -1,6 +1,6 @@
 # ADR-0001: App-owned resubscription for KubeMQ Events
 
-- Status: Accepted
+- Status: Superseded by the v1.4 RxJS subscription adapter
 - Date: 2026-08-29
 - Area: Messaging / KubeMQ Events adapter
 
@@ -11,6 +11,10 @@ single KubeMQ events channel via `kubemq-js` v3.0.1. After a dropped connection 
 observed a single `ERROR [KubeMqEventsService] KubeMQ subscription error: Connection
 dropped` log, after which the app **kept running but stopped receiving events**, with
 no crash and no re-delivery.
+
+This v3-specific decision was superseded when the adapter moved to
+`kubemq-js` v1.4.0. The current implementation wraps the v1 callback subscription
+in an RxJS observable and owns retries by creating a fresh `EventsClient`.
 
 The expectation — based on the SDK's documentation — was that the client would
 reconnect indefinitely and the subscription would resume on its own.

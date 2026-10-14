@@ -1,13 +1,17 @@
 import { Inject, Injectable, Logger, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
-import { KubeMQClient, createConsoleLogger } from 'kubemq-js';
+import { EventsClient } from 'kubemq-js';
+import type { Config, EventsSubscriptionResponse } from 'kubemq-js';
+import { Observable, Subscription, catchError, retry, tap, throwError, timer } from 'rxjs';
 import type { MessageHandler, MessageTransport } from './messaging.transport';
 import { MODULE_OPTIONS_TOKEN } from './kubemq-events.constants';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Options for the KubeMQ Events adapter.
  *
  * `address` is a `host:port` string (e.g. `localhost:50000`).
- * All other fields map directly to `kubemq-js` {@link ClientOptions}.
+ * `authToken`, `clientId`, and `credentials` map to the v1.4
+ * `kubemq-js` client configuration.
  * The producer side is assumed to send UTF-8-encoded JSON, which
  * matches the existing Service Bus payload contract.
  */
@@ -16,10 +20,10 @@ export interface KubeMqEventsOptions {
   address: string;
   /** Event channel to subscribe to. */
   channel: string;
-  /** Auth token (or a kubemq-js CredentialProvider instance). */
-  credentials?: string;
-  /** Enable TLS. Pass `true` for defaults or an object for advanced config. */
-  tls?: boolean;
+  /** KubeMQ authentication token. */
+  authToken?: string;
+  /** TLS client certificate credentials supported by kubemq-js v1.4. */
+  credentials?: Config['credentials'];
   /**
    * Delivery group. Subscribers sharing the same group + channel
    * load-balance messages. Different groups all receive every
@@ -31,14 +35,6 @@ export interface KubeMqEventsOptions {
    * auto-generated if omitted.
    */
   clientId?: string;
-  /**
-   * gRPC keepalive interval in milliseconds. KubeMQ brokers
-   * sometimes reject connections that ping too often with
-   * "excess pings" and increase the interval on their own; raise
-   * this to a high value if you see that warning.
-   * Defaults to 30000 when omitted (the broker default is ~10s).
-   */
-  keepalivePingMs?: number;
 }
 
 /**
@@ -54,14 +50,12 @@ export interface KubeMqEventsOptions {
 @Injectable()
 export class KubeMqEventsService implements MessageTransport, OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(KubeMqEventsService.name);
-  private client: KubeMQClient | undefined;
-  private subscription: { cancel(): void } | undefined;
+  private eventClient: EventsClient | undefined;
+  private subscription: Subscription | undefined;
   private readonly handlers: MessageHandler[] = [];
 
   /** Set once the app is shutting down; stops further reconnect attempts. */
   private closed = false;
-  private reconnectTimer: NodeJS.Timeout | undefined;
-  private reconnectAttempt = 0;
   /** Cap for exponential backoff, anything above this is unnecessary. */
   private readonly maxReconnectDelayMs = 30_000;
 
@@ -73,112 +67,124 @@ export class KubeMqEventsService implements MessageTransport, OnModuleInit, OnAp
       throw new Error('[KubeMQEvents] channel is required');
     }
 
-    // Default keepalive is 30s - the broker's built-in default is
-    // 10s which trips "excess pings" on shared brokers. Override
-    // via KUBEMQ_KEEPALIVE_PING_MS env if you need different
-    // behaviour.
-    const pingMs = this.options.keepalivePingMs ?? 30_000;
-
-    this.client = await KubeMQClient.create({
-      address: this.options.address,
-      logger: createConsoleLogger('info'),
-      keepalive: {
-        timeMs: pingMs,
-        timeoutMs: 10_000,
-        permitWithoutCalls: false,
+    this.eventClient = this.createEventClient();
+    this.subscription = this.eventSubscribe$(
+      this.options.channel,
+      this.options.group !== undefined ? { group: this.options.group } : undefined,
+    ).subscribe({
+      next: (event) => {
+        const normalized = normalizeKubeMqPayload(event.payload);
+        for (const handler of this.handlers) {
+          void this.invoke(handler, normalized, event);
+        }
       },
-      ...(this.options.credentials !== undefined
-        ? { credentials: this.options.credentials }
-        : {}),
-      ...(this.options.tls !== undefined ? { tls: this.options.tls } : {}),
-      ...(this.options.clientId !== undefined
-        ? { clientId: this.options.clientId }
-        : {}),
+      error: (err: unknown) => {
+        this.logger.error(
+          `KubeMQ event subscription stopped: ${errorMessage(err)}`,
+          err instanceof Error ? err.stack : undefined,
+        );
+      },
     });
 
-    // The kubemq-js SDK only re-establishes subscriptions when the whole
-    // gRPC channel enters TRANSIENT_FAILURE. A single dropped server
-    // stream fires `onError` but never resubscribes, so the subscriber
-    // silently goes dead after e.g. a broker restart. Own the resubscribe
-    // loop here instead: any error cancels the dead stream and schedules a
-    // fresh one with capped exponential backoff + jitter, retrying forever.
-    this.subscribe();
-
-    const groupDesc = this.options.group
-      ? ` (group=${this.options.group})`
-      : '';
+    const groupDesc = this.options.group ? ` (group=${this.options.group})` : '';
     this.logger.log(
       `Subscribed to channel "${this.options.channel}"${groupDesc} on ${this.options.address}`,
     );
   }
 
-  private subscribe(): void {
-    if (this.closed || !this.client) return;
+  /**
+   * Adapt the v1.4 callback subscription to an observable. Each retry
+   * creates a fresh EventsClient; the teardown also handles unsubscribe
+   * racing the SDK's asynchronous subscription setup.
+   */
+  eventSubscribe$<T>(
+    channel: string,
+    options?: { group: string },
+  ): Observable<{ id: string; payload: T; channel: string; metadata: string }> {
+    const source$ = new Observable<{
+      id: string;
+      payload: T;
+      channel: string;
+      metadata: string;
+    }>((subscriber) => {
+      let cancelled = false;
+      let eventSubscription: EventsSubscriptionResponse | undefined;
+      const client = this.eventClient;
 
-    this.subscription = this.client.subscribeToEvents({
-      channel: this.options.channel,
-      ...(this.options.group !== undefined
-        ? { group: this.options.group }
-        : {}),
-      onEvent: (event) => {
-        const body = decodeKubeMqBody(event.body);
-        const normalized = normalizeKubeMqPayload(body);
-        for (const handler of this.handlers) {
-          // Run sequentially so a slow handler cannot reorder
-          // delivery within a single event stream.
-          void this.invoke(handler, normalized, event);
-        }
-      },
-      onError: (err) => {
-        this.logger.error(
-          `KubeMQ subscription error: ${err.message}. Scheduling reconnect...`,
-        );
-        this.reconnectAttempt++;
-        this.scheduleReconnect();
-      },
+      if (this.closed || !client) {
+        subscriber.complete();
+        return;
+      }
+
+      this.logger.log(`KubeMQ event subscribes to ${channel}`);
+      void client
+        .subscribe(
+          { channel, ...(options?.group ? { group: options.group } : {}) },
+          (error, message) => {
+            if (error) {
+              subscriber.error(error);
+              return;
+            }
+            if (!message) return;
+            subscriber.next({
+              id: message.id,
+              payload: decodeKubeMqBody(message.body ?? '') as T,
+              channel: message.channel,
+              metadata: message.metadata,
+            });
+          },
+        )
+        .then((subscription) => {
+          if (cancelled) {
+            subscription.unsubscribe();
+          } else {
+            eventSubscription = subscription;
+          }
+        })
+        .catch((error: unknown) => subscriber.error(error));
+
+      return () => {
+        cancelled = true;
+        this.logger.log(`Unsubscribe KubeMQ event: ${channel}`);
+        eventSubscription?.unsubscribe();
+      };
     });
-  }
 
-  private scheduleReconnect(): void {
-    if (this.closed) return;
-
-    // Discard the dead stream before creating a replacement.
-    try {
-      this.subscription?.cancel();
-    } catch (err) {
-      this.logger.debug(
-        `Error cancelling stale subscription: ${(err as Error).message}`,
-      );
-    }
-
-    // Only ever one pending reconnect; a burst of errors coalesces into it.
-    if (this.reconnectTimer) return;
-
-    const delay = Math.min(
-      this.maxReconnectDelayMs,
-      1_000 * 2 ** this.reconnectAttempt,
+    return source$.pipe(
+      catchError((error: unknown) => {
+        this.logger.error(
+          `KubeMQ event subscription [${channel}] error: ${errorMessage(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+        return throwError(() => error);
+      }),
+      retry({
+        delay: (_error: unknown, retryCount: number) => {
+          const delayMs = Math.min(this.maxReconnectDelayMs, 1_000 * 2 ** (retryCount - 1));
+          const jitterMs = Math.random() * 250;
+          this.logger.warn(
+            `Retrying KubeMQ event subscription [${channel}] in ${Math.round(delayMs + jitterMs)}ms`,
+          );
+          return timer(delayMs + jitterMs).pipe(
+            tap(() => {
+              this.eventClient?.close();
+              if (!this.closed) this.eventClient = this.createEventClient();
+            }),
+          );
+        },
+      }),
     );
-    // Jitter avoids thundering-herd reconnects across worker replicas.
-    const jitter = Math.random() * 250;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = undefined;
-      this.subscribe();
-    }, delay + jitter);
   }
 
   async onApplicationShutdown(): Promise<void> {
     this.closed = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-    }
     try {
-      this.subscription?.cancel();
+      this.subscription?.unsubscribe();
     } catch (err) {
       this.logger.warn(`Error cancelling subscription: ${(err as Error).message}`);
     }
     try {
-      await this.client?.close();
+      this.eventClient?.close();
     } catch (err) {
       this.logger.warn(`Error closing client: ${(err as Error).message}`);
     }
@@ -189,6 +195,20 @@ export class KubeMqEventsService implements MessageTransport, OnModuleInit, OnAp
   }
 
   constructor(@Inject(MODULE_OPTIONS_TOKEN) private readonly options: KubeMqEventsOptions) {}
+
+  private createEventClient(): EventsClient {
+    return new EventsClient({
+      address: this.options.address,
+      reconnectInterval: 0,
+      ...(this.options.authToken !== undefined ? { authToken: this.options.authToken } : {}),
+      ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
+      ...(this.options.clientId !== undefined
+        ? { clientId: this.options.clientId }
+        : {
+            clientId: `event-${randomUUID()}`,
+          }),
+    });
+  }
 
   private async invoke(
     handler: MessageHandler,
@@ -208,18 +228,22 @@ export class KubeMqEventsService implements MessageTransport, OnModuleInit, OnAp
 
 /**
  * Decode a KubeMQ event payload. The producer is expected to send
- * UTF-8 JSON (matching the Service Bus v1 contract); fall back to
+ * UTF-8 JSON as bytes or a string (matching the Service Bus v1 contract); fall back to
  * the raw string if parsing fails so a malformed payload is still
  * observable downstream.
  */
-export function decodeKubeMqBody(bytes: Uint8Array): unknown {
-  const text = new TextDecoder('utf-8').decode(bytes);
+export function decodeKubeMqBody(bytes: Uint8Array | string): unknown {
+  const text = typeof bytes === 'string' ? bytes : new TextDecoder('utf-8').decode(bytes);
   if (!text) return '';
   try {
     return JSON.parse(text);
   } catch {
     return text;
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

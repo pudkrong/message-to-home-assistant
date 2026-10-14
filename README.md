@@ -27,10 +27,10 @@ your MQTT broker:
 | `KUBEMQ_ADDRESS` | KubeMQ broker `host:port`. Required when `MESSAGE_PROVIDER=kubemq`. |
 | `KUBEMQ_CHANNEL` | KubeMQ event channel. Required when `MESSAGE_PROVIDER=kubemq`. |
 | `KUBEMQ_TOKEN` | Optional KubeMQ authentication token. |
-| `KUBEMQ_TLS` | Optional KubeMQ TLS switch (`true` or `false`; default `false`). |
+| `KUBEMQ_TLS` | Set to `true` to enable KubeMQ TLS; requires both certificate and key paths. |
+| `KUBEMQ_TLS_CERT_PATH` / `KUBEMQ_TLS_KEY_PATH` | Optional paths to the TLS client certificate and private key. |
 | `KUBEMQ_CLIENT_ID` | Optional client identifier for KubeMQ logs/metrics. |
 | `KUBEMQ_GROUP` | Optional KubeMQ delivery group. Subscribers in the same group share events; different groups each receive them. |
-| `KUBEMQ_KEEPALIVE_PING_MS` | Optional KubeMQ gRPC keepalive interval in milliseconds (default `30000`). |
 | `REPORTS_CONFIG_PATH` | JSON report-to-entity mapping file (default `./config/reports.json`). |
 | `UNIT_FACTORIES_CONFIG_PATH` | JSON unit-factory/device config (default `./config/unit-factories.json`). |
 | `MQTT_URL` | MQTT broker URL, typically `mqtt://user:password@host:port` or `mqtts://user:password@host:port`. |

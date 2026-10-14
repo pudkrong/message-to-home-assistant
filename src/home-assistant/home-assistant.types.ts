@@ -5,19 +5,11 @@ export interface HomeAssistantOptions {
    * the URL.
    */
   mqttUrl: string;
-  /**
-   * Default device/identifier used by this app. Becomes part of
-   * the MQTT topic and the HA `device.identifiers` list.
-   */
-  sensor: string;
-  /**
-   * HA `area` assigned to the device. Empty string skips the
-   * suggestion.
-   */
-  room: string;
+  /** JSON file containing the devices to expose in Home Assistant. */
+  unitFactoriesFilePath: string;
   /** MQTT discovery prefix. Defaults to `homeassistant`. */
   discoveryPrefix?: string;
-  /** MQTT client id. Defaults to a slug of `sensor`. */
+  /** MQTT client id. Defaults to `nestjs-ha-bridge`. */
   clientId?: string;
   /**
    * How often to republish all discovery configs (seconds).
@@ -26,6 +18,19 @@ export interface HomeAssistantOptions {
    */
   discoveryRefreshIntervalSeconds?: number;
 }
+
+/** One unit factory exposed as a separate Home Assistant device. */
+export interface HomeAssistantDevice {
+  deviceId: string;
+  sensor: string;
+  room?: string;
+}
+
+/** Options after HomeAssistantModule has loaded the device config file. */
+export type ResolvedHomeAssistantOptions = Omit<
+  HomeAssistantOptions,
+  'unitFactoriesFilePath'
+> & { devices: HomeAssistantDevice[] };
 
 /**
  * Description of a HA entity we want to expose. Mirrors the

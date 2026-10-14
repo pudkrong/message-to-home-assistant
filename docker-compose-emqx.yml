@@ -1,0 +1,12 @@
+services:
+  emqx:
+    image: emqx/emqx:6.2.3
+    restart: unless-stopped
+    ports:
+      - 1883:1883
+      - 18083:18083
+    volumes:
+      - emqx-data:/opt/emqx/data
+
+volumes:
+  emqx-data:

@@ -32,10 +32,8 @@ your MQTT broker:
 | `KUBEMQ_GROUP` | Optional KubeMQ delivery group. Subscribers in the same group share events; different groups each receive them. |
 | `KUBEMQ_KEEPALIVE_PING_MS` | Optional KubeMQ gRPC keepalive interval in milliseconds (default `30000`). |
 | `REPORTS_CONFIG_PATH` | JSON report-to-entity mapping file (default `./config/reports.json`). |
-| `UNIT_FACTORIES_CONFIG_PATH` | JSON unit-factory allow-list (default `./config/unit-factories.json`). |
+| `UNIT_FACTORIES_CONFIG_PATH` | JSON unit-factory/device config (default `./config/unit-factories.json`). |
 | `MQTT_URL` | MQTT broker URL, typically `mqtt://user:password@host:port` or `mqtts://user:password@host:port`. |
-| `HA_SENSOR` | Device identifier/name used in Home Assistant and MQTT topics. |
-| `HA_ROOM` | Suggested Home Assistant area for the device; an empty value omits the suggestion. |
 | `HA_DISCOVERY_PREFIX` | MQTT discovery root (default `homeassistant`). |
 | `HA_DISCOVERY_REFRESH_SECONDS` | Discovery republish interval in seconds (default `3600`). Set to `0` to disable the timer. |
 
@@ -64,14 +62,24 @@ ID suffix; `name` is an optional display-name override. `deviceClass`,
 
 ### `config/unit-factories.json`
 
-Messages are accepted only when `unitFactoryNumber` exactly matches an entry.
-The `name` and `description` fields are optional metadata.
+Each entry defines one Home Assistant device. Incoming messages are routed to
+the device whose `unitFactoryNumber` matches exactly. `name` is the device's
+Home Assistant display name, `location` is its suggested area, and `deviceId`
+is its stable Home Assistant identifier and MQTT topic prefix.
 
 ```json
 [
-  { "unitFactoryNumber": "1234-000000-100000", "name": "Simulator" }
+  {
+    "deviceId": "209727310E81",
+    "location": "Bedroom",
+    "unitFactoryNumber": "1234-000000-100000",
+    "name": "AirC 200",
+    "description": "AirC 200"
+  }
 ]
 ```
+
+Add another array item to configure another device.
 
 ## Message contract
 
@@ -160,8 +168,7 @@ import type { BridgeOptions } from './bridge/bridge.types';
         },
         homeAssistant: {
           mqttUrl: config.get('MQTT_URL', ''),
-          sensor: config.get('HA_SENSOR', ''),
-          room: config.get('HA_ROOM', ''),
+          unitFactoriesFilePath: './factories.json',
         },
       }),
     }),
@@ -192,15 +199,17 @@ delivery). KubeMQ Events has no ack/nack in this adapter, so it does not provide
 the same redelivery guarantee. KubeMQ reconnects its subscription with
 backoff after subscription errors.
 
-MQTT publishes use QoS 0 and retained messages. Topics use the discovery prefix
-and slugified `HA_SENSOR` / entity IDs:
+MQTT publishes use QoS 0 and retained messages. Entity IDs are slugified; each
+configured device has its own discovery config and state topics:
 
 ```text
-<prefix>/sensor/<device>/<entity>/config
-<prefix>/sensor/<device>/<entity>/state
-<prefix>/sensor/<device>/availability
+<prefix>/device/<deviceId>/config
+<deviceId>/<entity>/state
+ha-mqtt-bridge/availability
 <prefix>/status                 # Home Assistant birth topic
 ```
+
+Devices share the availability topic because one MQTT connection has one Last Will.
 
 ## Restart and retained discovery
 

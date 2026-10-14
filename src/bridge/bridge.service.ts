@@ -4,6 +4,8 @@ import type { MessageTransport } from '../messaging/messaging.transport';
 import { ReportMappingService } from '../report-mapping/report-mapping.service';
 import { UnitFactoryFilterService } from '../unit-factory-filter/unit-factory-filter.service';
 import { HomeAssistantService } from '../home-assistant/home-assistant.service';
+import type { HomeAssistantEntityConfig } from '../home-assistant/home-assistant.types';
+import type { ReportDescriptor } from '../report-mapping/report-mapping.types';
 import { isPayloadV1 } from './bridge.types';
 
 /**
@@ -28,7 +30,10 @@ export class BridgeService implements OnModuleInit {
     private readonly homeAssistant: HomeAssistantService,
   ) {}
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
+    await this.homeAssistant.registerEntities(
+      [...this.reportMapping.entries()].map(toHomeAssistantEntity),
+    );
     this.transport.registerHandler((body) => this.handle(body));
     this.logger.log('Bridge ready');
   }
@@ -47,23 +52,22 @@ export class BridgeService implements OnModuleInit {
       );
       return;
     }
+    const unitFactory = this.unitFactoryFilter.get(body.unitFactoryNumber);
+    if (!unitFactory?.deviceId) {
+      this.logger.warn(
+        `Skipping unitFactoryNumber=${body.unitFactoryNumber} (no deviceId configured)`,
+      );
+      return;
+    }
 
     let published = 0;
     for (const item of body.data) {
       const descriptor = this.reportMapping.get(item.reportId);
       if (!descriptor) continue;
 
-      const objectId = descriptor.description;
       await this.homeAssistant.publishEntityState(
-        {
-          objectId,
-          name: descriptor.name ?? descriptor.description,
-          ...(descriptor.deviceClass ? { deviceClass: descriptor.deviceClass } : {}),
-          ...(descriptor.unitOfMeasurement
-            ? { unitOfMeasurement: descriptor.unitOfMeasurement }
-            : {}),
-          ...(descriptor.icon ? { icon: descriptor.icon } : {}),
-        },
+        unitFactory.deviceId,
+        toHomeAssistantEntity(descriptor),
         item.value,
         body.timestamp,
       );
@@ -74,6 +78,20 @@ export class BridgeService implements OnModuleInit {
       `unitFactory=${body.unitFactoryNumber} ts=${body.timestamp} -> published ${published} sensor updates`,
     );
   }
+}
+
+function toHomeAssistantEntity(
+  descriptor: ReportDescriptor,
+): HomeAssistantEntityConfig {
+  return {
+    objectId: descriptor.description,
+    name: descriptor.name ?? descriptor.description,
+    ...(descriptor.deviceClass ? { deviceClass: descriptor.deviceClass } : {}),
+    ...(descriptor.unitOfMeasurement
+      ? { unitOfMeasurement: descriptor.unitOfMeasurement }
+      : {}),
+    ...(descriptor.icon ? { icon: descriptor.icon } : {}),
+  };
 }
 
 function summarise(value: unknown): string {

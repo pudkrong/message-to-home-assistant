@@ -7,6 +7,7 @@ import { UnitFactoryFilterService } from '../unit-factory-filter/unit-factory-fi
 import { HomeAssistantService } from '../home-assistant/home-assistant.service';
 
 interface PublishedEntity {
+  deviceId: string;
   objectId: string;
   value: string | number | boolean;
   timestamp?: string;
@@ -16,6 +17,7 @@ describe('BridgeService', () => {
   let bridge: BridgeService;
   let handlers: Array<(body: unknown) => Promise<void> | void> = [];
   let published: PublishedEntity[] = [];
+  let registered: string[] = [];
 
   const humidityDescriptor = {
     reportId: 10116,
@@ -35,6 +37,7 @@ describe('BridgeService', () => {
   beforeEach(async () => {
     handlers = [];
     published = [];
+    registered = [];
 
     const transport: MessageTransport = {
       registerHandler: (h) => handlers.push(h),
@@ -52,23 +55,37 @@ describe('BridgeService', () => {
               if (id === temperatureDescriptor.reportId) return temperatureDescriptor;
               return undefined;
             },
+            entries: () => [humidityDescriptor, temperatureDescriptor],
           },
         },
         {
           provide: UnitFactoryFilterService,
           useValue: {
-            isAllowed: (num: string) => num === '1234-000000-100000',
+            isAllowed: (num: string) =>
+              ['1234-000000-100000', '1234-000000-200000'].includes(num),
+            get: (num: string) => {
+              const deviceIdByNumber: Record<string, string> = {
+                '1234-000000-100000': '209727310E81',
+                '1234-000000-200000': 'DEVICE-2',
+              };
+              const deviceId = deviceIdByNumber[num];
+              return deviceId ? { unitFactoryNumber: num, deviceId } : undefined;
+            },
           },
         },
         {
           provide: HomeAssistantService,
           useValue: {
+            registerEntities: async (entities: Array<{ objectId: string }>) => {
+              registered = entities.map(({ objectId }) => objectId);
+            },
             publishEntityState: async (
+              deviceId: string,
               entity: { objectId: string },
               value: string | number | boolean,
               timestamp?: string,
             ) => {
-              published.push({ objectId: entity.objectId, value, timestamp });
+              published.push({ deviceId, objectId: entity.objectId, value, timestamp });
             },
           },
         },
@@ -76,11 +93,15 @@ describe('BridgeService', () => {
     }).compile();
 
     bridge = moduleRef.get(BridgeService);
-    bridge.onModuleInit();
+    await bridge.onModuleInit();
   });
 
   it('registers one transport handler on init', () => {
     expect(handlers).toHaveLength(1);
+  });
+
+  it('pre-registers every mapped entity for complete device discovery', () => {
+    expect(registered).toEqual(['humidity', 'temperature']);
   });
 
   it('publishes every mapped report for an allowed factory and forwards the timestamp', async () => {
@@ -96,8 +117,18 @@ describe('BridgeService', () => {
       ],
     });
     expect(published).toEqual([
-      { objectId: 'humidity', value: 70.2, timestamp: '2026-08-16T22:07:21.000Z' },
-      { objectId: 'temperature', value: 25.8, timestamp: '2026-08-16T22:07:21.000Z' },
+      {
+        deviceId: '209727310E81',
+        objectId: 'humidity',
+        value: 70.2,
+        timestamp: '2026-08-16T22:07:21.000Z',
+      },
+      {
+        deviceId: '209727310E81',
+        objectId: 'temperature',
+        value: 25.8,
+        timestamp: '2026-08-16T22:07:21.000Z',
+      },
     ]);
   });
 
@@ -109,6 +140,24 @@ describe('BridgeService', () => {
       data: [{ reportId: 10116, value: 50 }],
     });
     expect(published).toEqual([]);
+  });
+
+  it('routes each factory message to its configured device', async () => {
+    await handlers[0]({
+      unitFactoryNumber: '1234-000000-200000',
+      version: 1,
+      timestamp: '2026-08-16T22:07:21.000Z',
+      data: [{ reportId: 10116, value: 51 }],
+    });
+
+    expect(published).toEqual([
+      {
+        deviceId: 'DEVICE-2',
+        objectId: 'humidity',
+        value: 51,
+        timestamp: '2026-08-16T22:07:21.000Z',
+      },
+    ]);
   });
 
   it('ignores messages that do not match the v1 schema', async () => {

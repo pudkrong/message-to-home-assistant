@@ -37,8 +37,10 @@ import type { MessagingOptions } from './messaging/messaging.types';
         },
         homeAssistant: {
           mqttUrl: config.get<string>('MQTT_URL', ''),
-          sensor: config.get<string>('HA_SENSOR', ''),
-          room: config.get<string>('HA_ROOM', ''),
+          unitFactoriesFilePath: config.get<string>(
+            'UNIT_FACTORIES_CONFIG_PATH',
+            './config/unit-factories.json',
+          ),
           discoveryPrefix: config.get<string>('HA_DISCOVERY_PREFIX', 'homeassistant'),
           discoveryRefreshIntervalSeconds: parseOptionalNumber(
             config.get<string>('HA_DISCOVERY_REFRESH_SECONDS'),

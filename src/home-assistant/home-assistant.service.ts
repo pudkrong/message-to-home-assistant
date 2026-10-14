@@ -1,17 +1,13 @@
-import {
-  Inject,
-  Injectable,
-  Logger,
-  OnApplicationShutdown,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Inject, Injectable, Logger, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
 import mqtt, { MqttClient } from 'mqtt';
-import { MODULE_OPTIONS_TOKEN } from './home-assistant.constants';
+import packageJson from '../../package.json';
+import { RESOLVED_OPTIONS_TOKEN } from './home-assistant.constants';
 import type {
   HomeAssistantEntityConfig,
-  HomeAssistantOptions,
+  ResolvedHomeAssistantOptions,
 } from './home-assistant.types';
 import { parseMqttUrl, slugify } from './util';
+import { randomUUID } from 'node:crypto';
 
 interface Deferred {
   resolve: () => void;
@@ -42,6 +38,9 @@ interface SensorStatePayload {
  * keeps retention deterministically alive.
  */
 const DISCOVERY_MESSAGE_EXPIRY_SECONDS = 86_400;
+const ORIGIN_NAME = 'ha-mqtt-bridge';
+// One MQTT connection can have only one Last Will topic, so all devices share availability.
+const AVAILABILITY_TOPIC = `${ORIGIN_NAME}/availability`;
 
 /**
  * Generic MQTT bridge to Home Assistant. The module only owns
@@ -54,31 +53,30 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
   private readonly logger = new Logger(HomeAssistantService.name);
   private client: MqttClient | undefined;
   private parsed: ReturnType<typeof parseMqttUrl> | undefined;
-  private readonly registered = new Map<string, HomeAssistantEntityConfig>();
+  private readonly registered = new Map<string, Map<string, HomeAssistantEntityConfig>>();
   private readonly deferredQueue: Deferred[] = [];
   private online = false;
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly discoveryDirty = new Set<string>();
 
   constructor(
-    @Inject(MODULE_OPTIONS_TOKEN) private readonly options: HomeAssistantOptions,
+    @Inject(RESOLVED_OPTIONS_TOKEN)
+    private readonly options: ResolvedHomeAssistantOptions,
   ) {}
 
   async onModuleInit(): Promise<void> {
     if (!this.options.mqttUrl) {
       throw new Error('[HomeAssistant] MQTT_URL is required');
     }
-    if (!this.options.sensor) {
-      throw new Error('[HomeAssistant] HA_SENSOR is required (device identifier)');
+    if (this.options.devices.length === 0) {
+      throw new Error('[HomeAssistant] at least one device is required');
     }
 
     this.parsed = parseMqttUrl(this.options.mqttUrl);
 
-    const clientId =
-      this.options.clientId ?? `nestjs-ha-bridge-${slugify(this.options.sensor)}`;
+    const clientId = this.options.clientId ?? `nestjs-ha-bridge-${randomUUID()}`;
     const connectUrl = `${this.parsed.protocol}://${this.parsed.host}:${this.parsed.port}`;
 
-    const deviceId = slugify(this.options.sensor);
-    const availabilityTopic = `${this.discovery()}/sensor/${deviceId}/availability`;
     const statusTopic = `${this.discovery()}/status`;
 
     this.client = mqtt.connect(connectUrl, {
@@ -94,7 +92,7 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       // retained "offline" so HA marks the device unavailable instead of
       // showing stale data forever.
       will: {
-        topic: availabilityTopic,
+        topic: AVAILABILITY_TOPIC,
         payload: 'offline',
         qos: 0,
         retain: true,
@@ -111,9 +109,7 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       // keep receiving HA's birth message.
       this.client?.subscribe(statusTopic, { qos: 0 }, (err) => {
         if (err) {
-          this.logger.error(
-            `Failed to subscribe to ${statusTopic}: ${err.message}`,
-          );
+          this.logger.error(`Failed to subscribe to ${statusTopic}: ${err.message}`);
         }
       });
       // Push retained "online" so HA immediately marks us available.
@@ -131,32 +127,24 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
     // recreated without waiting for the periodic refresh timer.
     this.client.on('message', (topic, payload) => {
       if (topic !== statusTopic || payload.toString() !== 'online') return;
-      this.logger.log(
-        'Home Assistant came online - re-announcing discovery configs',
-      );
+      this.logger.log('Home Assistant came online - re-announcing discovery configs');
       this.publishAvailability(true).catch(() => undefined);
       this.refreshAllDiscovery();
     });
 
     this.client.on('reconnect', () => this.logger.warn('MQTT reconnecting...'));
-    this.client.on('error', (err) =>
-      this.logger.error(`MQTT error: ${err.message}`),
-    );
+    this.client.on('error', (err) => this.logger.error(`MQTT error: ${err.message}`));
     this.client.on('close', () => {
       this.online = false;
       this.logger.warn('MQTT connection closed');
     });
 
-    const interval =
-      (this.options.discoveryRefreshIntervalSeconds ?? 3600) * 1_000;
+    const interval = (this.options.discoveryRefreshIntervalSeconds ?? 3600) * 1_000;
     if (interval > 0) {
       this.logger.log(
         `Discovery refresh every ${this.options.discoveryRefreshIntervalSeconds ?? 3600}s`,
       );
-      this.refreshTimer = setInterval(
-        () => this.refreshAllDiscovery(),
-        interval,
-      );
+      this.refreshTimer = setInterval(() => this.refreshAllDiscovery(), interval);
     }
   }
 
@@ -165,22 +153,18 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
       if (this.refreshTimer) {
         clearInterval(this.refreshTimer);
       }
-    if (this.client?.connected) {
+      if (this.client?.connected) {
         await this.publishAvailability(false);
       }
     } catch (err) {
-      this.logger.warn(
-        `Failed to publish offline availability: ${(err as Error).message}`,
-      );
+      this.logger.warn(`Failed to publish offline availability: ${(err as Error).message}`);
     }
-    await new Promise<void>((resolve) =>
-      this.client?.end(false, {}, () => resolve()),
-    );
+    await new Promise<void>((resolve) => this.client?.end(false, {}, () => resolve()));
   }
 
   /**
-   * Publish the MQTT discovery config payload for `entity`. Idempotent:
-   * repeated calls with the same `objectId` are a no-op.
+   * Register an entity and publish the complete device config when its
+   * definition changes. Repeated state updates do not republish config.
    *
    * All sensors use the JSON state shape
    * (`{ value, timestamp? }`) and a `value_template` so the timestamp
@@ -188,27 +172,41 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
    * of being silently dropped.
    */
   async registerEntity(entity: HomeAssistantEntityConfig): Promise<void> {
-    if (!entity.objectId) {
-      throw new Error('[HomeAssistant] entity.objectId is required');
-    }
-    const uniqueId = `${slugify(this.options.sensor)}_${slugify(entity.objectId)}`;
-    if (this.registered.has(uniqueId)) {
-      return;
-    }
-    const deviceId = slugify(this.options.sensor);
-    const { configTopic, configPayload } = this.buildDiscoveryConfig(
-      entity,
-      uniqueId,
-      deviceId,
-    );
+    await this.registerEntities([entity]);
+  }
 
-    await this.publish(configTopic, JSON.stringify(configPayload), {
-      qos: 0,
-      retain: true,
-      messageExpiryInterval: DISCOVERY_MESSAGE_EXPIRY_SECONDS,
-    });
-    this.registered.set(uniqueId, entity);
-    this.logger.log(`Registered entity ${uniqueId} (${entity.name})`);
+  /** Register a complete known set of entities with one discovery update. */
+  async registerEntities(entities: HomeAssistantEntityConfig[]): Promise<void> {
+    for (const device of this.options.devices) {
+      const deviceEntities = this.registered.get(device.deviceId) ?? new Map();
+      let changed = false;
+      for (const entity of entities) {
+        if (!entity.objectId) {
+          throw new Error('[HomeAssistant] entity.objectId is required');
+        }
+        const componentKey = slugify(entity.objectId);
+        if (!componentKey) {
+          throw new Error('[HomeAssistant] entity.objectId must contain letters or numbers');
+        }
+
+        const existing = deviceEntities.get(componentKey);
+        if (existing && this.sameEntityConfig(existing, entity)) continue;
+
+        deviceEntities.set(componentKey, entity);
+        changed = true;
+        this.logger.log(`Registered entity ${device.deviceId}_${componentKey} (${entity.name})`);
+      }
+      this.registered.set(device.deviceId, deviceEntities);
+      if (changed) this.discoveryDirty.add(device.deviceId);
+    }
+
+    if (this.online) {
+      for (const device of this.options.devices) {
+        if (this.discoveryDirty.has(device.deviceId)) {
+          await this.publishDeviceDiscovery(device.deviceId);
+        }
+      }
+    }
   }
 
   /**
@@ -218,12 +216,13 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
    * attribute so the dashboard reflects the real reading time.
    */
   async publishState(
+    deviceId: string,
     objectId: string,
     value: string | number | boolean,
     timestamp?: string,
   ): Promise<void> {
-    const deviceId = slugify(this.options.sensor);
-    const topic = `${this.discovery()}/sensor/${deviceId}/${slugify(objectId)}/state`;
+    this.assertKnownDevice(deviceId);
+    const topic = `${deviceId}/${slugify(objectId)}/state`;
     const payload: SensorStatePayload = { value };
     if (timestamp !== undefined) payload.timestamp = timestamp;
     await this.publish(topic, JSON.stringify(payload), { qos: 0, retain: true });
@@ -235,19 +234,19 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
    * {@link publishState}.
    */
   async publishEntityState(
+    deviceId: string,
     entity: HomeAssistantEntityConfig,
     value: string | number | boolean,
     timestamp?: string,
   ): Promise<void> {
+    this.assertKnownDevice(deviceId);
     await this.registerEntity(entity);
-    await this.publishState(entity.objectId, value, timestamp);
+    await this.publishState(deviceId, entity.objectId, value, timestamp);
   }
 
   /** Force the HA `availability` topic for the device. */
   async publishAvailability(online: boolean): Promise<void> {
-    const deviceId = slugify(this.options.sensor);
-    const topic = `${this.discovery()}/sensor/${deviceId}/availability`;
-    await this.publish(topic, online ? 'online' : 'offline', {
+    await this.publish(AVAILABILITY_TOPIC, online ? 'online' : 'offline', {
       qos: 0,
       retain: true,
       messageExpiryInterval: DISCOVERY_MESSAGE_EXPIRY_SECONDS,
@@ -257,72 +256,87 @@ export class HomeAssistantService implements OnModuleInit, OnApplicationShutdown
   // ── periodic discovery refresh ──────────────────────────────
 
   /**
-   * Unconditionally republish every registered entity's discovery
-   * config to the broker. Called on a timer so retained messages
-   * don't expire (some brokers enforce a `message-expiry-interval`
-   * even on retained messages).
+   * Republish the complete device config periodically so retained messages stay
+   * alive (some brokers enforce a `message-expiry-interval` even on retained
+   * messages).
    */
   private refreshAllDiscovery(): void {
-    if (this.registered.size === 0) return;
-    let count = 0;
-    for (const [uniqueId, entity] of this.registered) {
-      const deviceId = slugify(this.options.sensor);
-      const { configTopic, configPayload } = this.buildDiscoveryConfig(
-        entity,
-        uniqueId,
-        deviceId,
-      );
-      this.publish(configTopic, JSON.stringify(configPayload), {
-        qos: 0,
-        retain: true,
-        messageExpiryInterval: DISCOVERY_MESSAGE_EXPIRY_SECONDS,
-      }).catch((err) =>
+    for (const device of this.options.devices) {
+      if ((this.registered.get(device.deviceId)?.size ?? 0) === 0) continue;
+      this.publishDeviceDiscovery(device.deviceId).catch((err) =>
         this.logger.warn(
-          `Discovery refresh failed for ${uniqueId}: ${(err as Error).message}`,
+          `Discovery refresh failed for ${device.deviceId}: ${(err as Error).message}`,
         ),
       );
-      count++;
     }
-    this.logger.log(`Refreshed ${count} discovery config(s)`);
   }
 
   /**
-   * Build the MQTT discovery config payload and topic for `entity`.
-   *
-   * Extracted into a helper so both `registerEntity` (first-time
-   * registration) and `refreshAllDiscovery` (periodic re-publish)
-   * use the same logic.
+   * Publish the complete device discovery payload from the registered
+   * entity set. State updates use separate application-owned topics.
    */
-  private buildDiscoveryConfig(
-    entity: HomeAssistantEntityConfig,
-    uniqueId: string,
-    deviceId: string,
-  ): { configTopic: string; configPayload: Record<string, unknown> } {
-    const stateTopic = `${this.discovery()}/sensor/${deviceId}/${slugify(entity.objectId)}/state`;
-    const availabilityTopic = `${this.discovery()}/sensor/${deviceId}/availability`;
-    const configTopic = `${this.discovery()}/sensor/${deviceId}/${slugify(entity.objectId)}/config`;
-
-    const configPayload: Record<string, unknown> = {
-      unique_id: uniqueId,
-      name: entity.name,
-      state_topic: stateTopic,
-      value_template: '{{ value_json.value }}',
-      availability_topic: availabilityTopic,
-      payload_available: 'online',
-      payload_not_available: 'offline',
-      device: {
-        identifiers: [deviceId],
-        name: this.options.sensor,
-        ...(this.options.room ? { suggested_area: this.options.room } : {}),
-      },
-    };
-    if (entity.deviceClass) configPayload['device_class'] = entity.deviceClass;
-    if (entity.unitOfMeasurement) {
-      configPayload['unit_of_measurement'] = entity.unitOfMeasurement;
+  private async publishDeviceDiscovery(deviceId: string): Promise<void> {
+    const components: Record<string, Record<string, unknown>> = {};
+    const device = this.options.devices.find((item) => item.deviceId === deviceId);
+    if (!device) throw new Error(`[HomeAssistant] unknown deviceId: ${deviceId}`);
+    for (const [componentKey, entity] of this.registered.get(deviceId) ?? []) {
+      const component: Record<string, unknown> = {
+        p: 'sensor',
+        unique_id: `${deviceId}_${componentKey}`,
+        name: entity.name,
+        state_topic: `${deviceId}/${componentKey}/state`,
+        value_template: '{{ value_json.value }}',
+        availability_topic: AVAILABILITY_TOPIC,
+        payload_available: 'online',
+        payload_not_available: 'offline',
+      };
+      if (entity.deviceClass) component['device_class'] = entity.deviceClass;
+      if (entity.unitOfMeasurement) {
+        component['unit_of_measurement'] = entity.unitOfMeasurement;
+      }
+      if (entity.icon) component['icon'] = entity.icon;
+      components[componentKey] = component;
     }
-    if (entity.icon) configPayload['icon'] = entity.icon;
 
-    return { configTopic, configPayload };
+    const configPayload = {
+      dev: {
+        ids: device.deviceId,
+        name: device.sensor,
+        ...(device.room ? { suggested_area: device.room } : {}),
+      },
+      o: { name: ORIGIN_NAME, sw: packageJson.version },
+      cmps: components,
+    };
+    const configTopic = `${this.discovery()}/device/${deviceId}/config`;
+
+    await this.publish(configTopic, JSON.stringify(configPayload), {
+      qos: 0,
+      retain: true,
+      messageExpiryInterval: DISCOVERY_MESSAGE_EXPIRY_SECONDS,
+    });
+    this.discoveryDirty.delete(deviceId);
+    this.logger.log(
+      `Published discovery config for ${device.sensor} with ${Object.keys(components).length} component(s)`,
+    );
+  }
+
+  private assertKnownDevice(deviceId: string): void {
+    if (!this.options.devices.some((device) => device.deviceId === deviceId)) {
+      throw new Error(`[HomeAssistant] unknown deviceId: ${deviceId}`);
+    }
+  }
+
+  private sameEntityConfig(
+    left: HomeAssistantEntityConfig,
+    right: HomeAssistantEntityConfig,
+  ): boolean {
+    return (
+      left.objectId === right.objectId &&
+      left.name === right.name &&
+      left.deviceClass === right.deviceClass &&
+      left.unitOfMeasurement === right.unitOfMeasurement &&
+      left.icon === right.icon
+    );
   }
 
   // ── availability ────────────────────────────────────────────

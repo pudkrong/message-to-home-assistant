@@ -10,6 +10,10 @@ export type UnitFactoryFilterSource =
 export interface UnitFactoryInfo {
   /** The exact `unitFactoryNumber` we want to accept. */
   unitFactoryNumber: string;
+  /** Stable Home Assistant device identifier. */
+  deviceId: string;
+  /** Optional HA area label. */
+  location?: string;
   /** Display name (e.g. room label / device title in HA). */
   name?: string;
   /** Optional human-readable description for logs. */
@@ -19,4 +23,3 @@ export interface UnitFactoryInfo {
 export interface UnitFactoryFilterOptions {
   source: UnitFactoryFilterSource;
 }
-
